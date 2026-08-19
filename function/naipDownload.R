@@ -31,10 +31,10 @@ getNAIPYear <- function(aoi) {
       error = function(e) {
         retry_count <<- retry_count + 1
         if (retry_count < max_retries) {
-          # Progressive wait: 10s, 20s, 30s, 40s...
-          wait_time <- 10 * retry_count
+          # Progressive wait: 10s, 20s, 30s, 40s... with jitter
+          wait_time <- 10 * retry_count + runif(1, 1, 5)
           message(sprintf(
-            "STAC API Server Overloaded. Waiting %d seconds to retry (Attempt %d of %d)...",
+            "STAC API Server Overloaded. Waiting %.1f seconds to retry (Attempt %d of %d)...",
             wait_time,
             retry_count,
             max_retries
@@ -88,15 +88,48 @@ downloadNAIP_vsi <- function(aoi, year, exportFolder, buffer_m = 0) {
   # 2. Search Planetary Computer
   stac_endpoint <- "https://planetarycomputer.microsoft.com/api/stac/v1"
   
-  search_results <- rstac::stac(stac_endpoint) |>
-    rstac::stac_search(
-      collections = "naip",
-      bbox = bbox_4326,
-      datetime = paste0(year, "-01-01T00:00:00Z/", year, "-12-31T23:59:59Z"),
-      limit = 100
-    ) |>
-    rstac::get_request() |>
-    rstac::items_sign(rstac::sign_planetary_computer())
+  # --- EXPONENTIAL BACKOFF RETRY LOGIC ---
+  max_retries <- 10
+  retry_count <- 0
+  request_success <- FALSE
+  search_results <- NULL
+  
+  while (!request_success && retry_count < max_retries) {
+    tryCatch(
+      {
+        search_results <- rstac::stac(stac_endpoint) |>
+          rstac::stac_search(
+            collections = "naip",
+            bbox = bbox_4326,
+            datetime = paste0(year, "-01-01T00:00:00Z/", year, "-12-31T23:59:59Z"),
+            limit = 100
+          ) |>
+          rstac::get_request() |>
+          rstac::items_sign(rstac::sign_planetary_computer())
+        
+        request_success <- TRUE 
+      },
+      error = function(e) {
+        retry_count <<- retry_count + 1
+        if (retry_count < max_retries) {
+          wait_time <- 10 * retry_count + runif(1, 1, 5) # Added jitter
+          message(sprintf(
+            "STAC API (Download) Overloaded. Waiting %.1f seconds to retry (Attempt %d of %d)...",
+            wait_time,
+            retry_count,
+            max_retries
+          ))
+          Sys.sleep(wait_time)
+        } else {
+          stop(sprintf(
+            "STAC API (Download) failed after %d attempts. Original error: %s",
+            max_retries,
+            e$message
+          ))
+        }
+      }
+    )
+  }
   
   if (length(search_results$features) == 0) {
     stop("No NAIP imagery found for this area/year.")

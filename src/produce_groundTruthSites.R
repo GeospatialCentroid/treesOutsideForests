@@ -1,7 +1,10 @@
 # This is a generalized method for downloading material from the planetary computer
 
 pacman::p_load(dplyr, sf, terra, tidyr, tictoc, foreach, doParallel, doSNOW, snic)
-# once exported can zip via terminal with the following command for d in */; do zip -r "${d%/}.zip" "$d"; done
+# once exported can zip via terminal with the following command 
+# for d in */; do zip -r "${d%/}.zip" "$d"; done
+# this will delete the original folder 
+# for dir in */; do zip -r "${dir%/}.zip" "$dir" && rm -r "$dir"; done
 
 # testing
 library(tmap)
@@ -19,6 +22,7 @@ mlra <- sf::st_read(dsn = "data/mlra/lower48MLRA.gpkg") |>
   dplyr::filter(LRRSYM == lrr_symbol)
 
 random <- FALSE
+multi_year <- TRUE # Toggle for multi-year download
 
 # establish methods for random selection within an LLR or selection from within an establish set of 1km areas else it should read in a specific set of site ids. 
 set.seed(12486)
@@ -38,17 +42,34 @@ if(random){
     lon = coords_df$X
   )
   
-  
 }else{
   # new table for the update datasets or specific location runs 
-  table <-  readr::read_csv("data/groundTruthSites/llr_G_forestNeyman200_sites.csv")
-  # need to assing a random year - added method back to the naip scape process 
+  # lrr_F_final60_GT_sites.csv
+  table <-  readr::read_csv("data/LRR_sampleGrids/groundTruth_ids_lrr_F_06_2026.csv")
+  
+  # draw 100 random samples from the change class.
+  drawSubset <- TRUE
+  # setting new seed for a different draw 
+  set.seed(124) # previous draws 123, 
+  if(drawSubset){
+    table <- readr::read_csv("data/aois_showing_change_trends.csv")|>
+      dplyr::group_by(trajectory_group)|>
+      dplyr::slice_sample(n = 50)
+    table$id <- table$aoi_id
+  }
+  
+  # need to assign years - added method back to the naip scape process 
   years <- c(2012, 2016, 2020)
-  table <- table %>%
-    mutate(year = sample(years, size = n(), replace = TRUE))
+  
+  if(multi_year){
+    table <- table %>%
+      dplyr::select(-any_of("year")) %>%
+      tidyr::expand_grid(year = years)
+  } else {
+    table <- table %>%
+      dplyr::mutate(year = sample(years, size = n(), replace = TRUE))
+  }
 }
-
-
 
 # Setup directories
 aoi_dir <- file.path("data/aoiExports")
@@ -59,10 +80,10 @@ temp_dir <- file.path("data/download")
 export_dir <- file.path("data/exportData")
 
 # --- EXECUTION TOGGLES ---
-run_parallel <- TRUE # Set to TRUE for production, FALSE for sequential debugging
-run_snic <- TRUE     # Set to TRUE to generate SNIC location data, FALSE to skip
+run_parallel <- FALSE # Set to TRUE for production, FALSE for sequential debugging
+run_snic <- FALSE     # Set to TRUE to generate SNIC location data, FALSE to skip
 # ------------------------
-# set buffer dist 
+# set buffer dist (Aligned with bulk download)
 buff_dist_m <- 250 # produces a 1.5km image 
 
 tic("Total Script Runtime")
@@ -71,7 +92,7 @@ if (run_parallel) {
   # ==========================================
   # PARALLEL EXECUTION
   # ==========================================
-  num_cores <- max(1, parallel::detectCores() - 16)
+  num_cores <- max(1, parallel::detectCores() - 30)
   cl <- makeCluster(num_cores)
   registerDoParallel(cl)
   cat("Starting cluster with", num_cores, "cores...\n")
@@ -82,14 +103,16 @@ if (run_parallel) {
                 "generate_scaled_seeds", "process_segmentations", "copyToExport",
                 "g100", "temp_dir", "naip_dir", "snic_dir", "run_snic", "buff_dist_m", 
                 "table", "export_dir", "aoi_dir", "lidar_dir", 
-                "readAndName"), # <--- ADD THIS HERE
+                "readAndName"), 
     .errorhandling = 'pass'
   ) %dopar% {
+    Sys.sleep(runif(1, min = 1, max = 10))
+    
     lapply(list.files(path = "function", pattern = ".R", full.names = TRUE), source)
     
     target_year <- as.character(table$year[task_row]) 
     
-    # --- 1. DYNAMIC AOI FETCHING (Synced from Sequential) ---
+    # --- 1. DYNAMIC AOI FETCHING ---
     if("lon" %in% names(table)){
       pt_lon <- table$lon[task_row]
       pt_lat <- table$lat[task_row]
@@ -136,10 +159,10 @@ if (run_parallel) {
     if (is.null(actual_year)) {
       return(list(id = id, year = target_year, status = "Failed - No imagery found within fallback range", time = 0))
     }
-    # Check if the export for the actual fallback year already exists
     if (dir.exists(paste0(export_dir, "/aoi_", id, "_", actual_year))) {
       return(list(id = id, year = target_year, status = "Skipped - Already Exists (Fallback Year)", time = 0))
     }
+    
     # --- 4. EXECUTION ---
     tic()
     process_status <- tryCatch({
@@ -150,15 +173,25 @@ if (run_parallel) {
       
       if (length(naip_files) == 0) stop("No files matched the regex pattern on disk.")
       
-      # Synced argument: buffer_only = FALSE
       mergeAndExportNAIP(files = naip_files, out_path = naip_dir, aoi = aoi, year = actual_year, buffer_only = FALSE)
       
+      # --- Explicit 8-bit Alignment Check ---
+      r1_path <- list.files(path = naip_dir, pattern = paste0("1km_.*", id, ".*\\.tif$"), full.names = TRUE)
+      if (length(r1_path) > 0) {
+        r1_align <- terra::rast(r1_path[1])
+        r1_max <- max(terra::minmax(r1_align)[2, ], na.rm = TRUE)
+        
+        if (any(terra::datatype(r1_align) != "INT1U") || r1_max > 255) {
+          if (r1_max > 255) {
+            r1_align <- terra::stretch(r1_align, minv = 0, maxv = 255)
+          }
+          terra::writeRaster(r1_align, filename = r1_path[1], datatype = "INT1U", overwrite = TRUE)
+        }
+      }
+      
       if (run_snic) {
-        # Synced Regex: 1km_
-        r1_path <- list.files(path = naip_dir, pattern = paste0("1km_.*", id, ".*\\.tif$"), full.names = TRUE)      
-        r1  <- terra::rast(r1_path)
+        r1 <- terra::rast(r1_path[1])
         seeds <- generate_scaled_seeds(r = r1)
-        # Synced argument: aoi = aoi
         process_segmentations(r = r1, seed_list = seeds, output_dir = snic_dir, file_id = id, aoi = aoi, year = actual_year)
       }
       
@@ -180,14 +213,13 @@ if (run_parallel) {
   cat("Running sequentially for debugging...\n")
   
   results <- foreach(
-    task_row = 1:2,#nrow(table),
+    task_row = 1:nrow(table),
     .packages = c("terra", "sf", "tictoc", "stringr", "purrr"),
     .errorhandling = 'pass'
   ) %do% {
     
     target_year <- as.character(table$year[task_row]) 
     
-    # Extract coordinates to pass to getAOI
     if("lon" %in% names(table)){
       pt_lon <- table$lon[task_row]
       pt_lat <- table$lat[task_row]
@@ -195,15 +227,10 @@ if (run_parallel) {
       
       cat(sprintf("\n--- Starting Task %d of %d ---\n", task_row, nrow(table)))
       cat("1. Fetching AOI using point feature...\n")
-      
-      # Pass the coordinate vector to getAOI
       aoi <- getAOI(grid100 = g100, point = current_point)
     }else{
-      
       cat(sprintf("\n--- Starting Task %d of %d ---\n", task_row, nrow(table)))
       cat("1. Fetching AOI using id feature...\n")
-      
-      # Pass the coordinate vector to getAOI
       aoi <- getAOI(grid100 = g100, id = table$id[task_row])
     }
     
@@ -232,10 +259,10 @@ if (run_parallel) {
     # --- 3. ROBUST YEAR HANDLING ---
     target_num <- as.numeric(target_year)
     preferred_years <- as.character(c(
-      target_num,      # Initial year
-      target_num - 1,  # Move one year down
-      target_num - 2,  # Move two years down
-      target_num + 1   # Move one year up
+      target_num,      
+      target_num - 1,  
+      target_num - 2,  
+      target_num + 1   
     ))
     
     actual_year <- NULL
@@ -262,7 +289,7 @@ if (run_parallel) {
     process_status <- tryCatch({
       
       cat("4. Requesting Planetary Computer Download...\n")
-      downloadNAIP_vsi(aoi = aoi, year = actual_year,buffer_m = buff_dist_m,  exportFolder = temp_dir)
+      downloadNAIP_vsi(aoi = aoi, year = actual_year, buffer_m = buff_dist_m, exportFolder = temp_dir)
       
       cat("5. Locating Downloaded Files...\n")
       naip_string <- paste0("^naip_", actual_year, "_id_", id, "_[0-9]+\\.tif$")
@@ -274,12 +301,28 @@ if (run_parallel) {
       cat("   -> Found", length(naip_files), "files to merge.\n")
       
       cat("6. Merging NAIP Imagery...\n")
-      mergeAndExportNAIP(files = naip_files, out_path = naip_dir, aoi = aoi,year = actual_year,buffer_only = FALSE)
+      mergeAndExportNAIP(files = naip_files, out_path = naip_dir, aoi = aoi, year = actual_year, buffer_only = FALSE)
+      
+      cat("6.5 Enforcing 8-bit Image Output...\n")
+      r1_path <- list.files(path = naip_dir, pattern = paste0("1km_.*", id, ".*\\.tif$"), full.names = TRUE)
+      if (length(r1_path) > 0) {
+        r1_align <- terra::rast(r1_path[1])
+        r1_max <- max(terra::minmax(r1_align)[2, ], na.rm = TRUE)
+        
+        if (any(terra::datatype(r1_align) != "INT1U") || r1_max > 255) {
+          cat("   -> Stretching and recasting raster to INT1U...\n")
+          if (r1_max > 255) {
+            r1_align <- terra::stretch(r1_align, minv = 0, maxv = 255)
+          }
+          terra::writeRaster(r1_align, filename = r1_path[1], datatype = "INT1U", overwrite = TRUE)
+        } else {
+          cat("   -> Raster is already properly formatted as INT1U.\n")
+        }
+      }
       
       if (run_snic) {
         cat("7. Starting SNIC Processing...\n")
-        r1_path <- list.files(path = naip_dir, pattern = paste0("1km_.*", id, ".*\\.tif$"), full.names = TRUE)      
-        r1  <- terra::rast(r1_path)
+        r1 <- terra::rast(r1_path[1])
         seeds <- generate_scaled_seeds(r = r1)
         process_segmentations(r = r1, seed_list = seeds, output_dir = snic_dir, file_id = id, aoi = aoi, year = actual_year)
       } else {
@@ -309,7 +352,6 @@ total_runtime <- toc()
 # ---------------------------------------------------------
 valid_results <- Filter(function(x) is.list(x) && !is.null(x$status), results)
 
-# Use Filter instead of bracket subsetting with sapply
 successful_runs <- Filter(function(x) x$status == "Success", valid_results)
 failed_runs     <- Filter(function(x) grepl("Failed", x$status), valid_results)
 skipped_runs    <- Filter(function(x) grepl("Skipped", x$status), valid_results)
@@ -336,11 +378,7 @@ if (length(failed_runs) > 0) {
   }
 }
 
-
-
-
 cleanup_mismatched_aois <- function(target_table, export_directory, dry_run = TRUE) {
-  # Get a list of all directories in the target folder
   all_folders <- list.dirs(export_directory, full.names = TRUE, recursive = FALSE)
   
   if (length(all_folders) == 0) {
@@ -348,7 +386,6 @@ cleanup_mismatched_aois <- function(target_table, export_directory, dry_run = TR
     return(invisible())
   }
   
-  # Filter for folders that match the "aoi_" prefix
   folder_basenames <- basename(all_folders)
   valid_folders <- all_folders[grepl("^aoi_", folder_basenames)]
   valid_basenames <- basename(valid_folders)
@@ -359,23 +396,15 @@ cleanup_mismatched_aois <- function(target_table, export_directory, dry_run = TR
     folder_path <- valid_folders[i]
     folder_name <- valid_basenames[i]
     
-    # Strip the "aoi_" prefix to isolate {id}_{year}
     name_no_prefix <- sub("^aoi_", "", folder_name)
-    
-    # Extract the ID and Year using regex. 
     matches <- regmatches(name_no_prefix, regexec("^(.*)_([0-9]{4})$", name_no_prefix))
     
     if (length(matches[[1]]) == 3) {
       folder_id <- matches[[1]][2]
       folder_year <- as.character(matches[[1]][3])
       
-      # Check if this specific AOI ID exists in the target table
       if (folder_id %in% target_table$id) {
-        
-        # Retrieve the assigned target year from the table
         expected_year_num <- as.numeric(target_table$year[target_table$id == folder_id])
-        
-        # Recreate the robust fallback range used in the download script
         acceptable_years <- as.character(c(
           expected_year_num,
           expected_year_num - 1,
@@ -383,7 +412,6 @@ cleanup_mismatched_aois <- function(target_table, export_directory, dry_run = TR
           expected_year_num + 1
         ))
         
-        # If the folder year is NOT in the acceptable range, flag for deletion
         if (!(folder_year %in% acceptable_years)) {
           folders_to_delete <- c(folders_to_delete, folder_path)
         }
@@ -391,10 +419,8 @@ cleanup_mismatched_aois <- function(target_table, export_directory, dry_run = TR
     }
   }
   
-  # Execution block
   if (length(folders_to_delete) > 0) {
     message(sprintf("Found %d mismatched folders.", length(folders_to_delete)))
-    
     for (del_folder in folders_to_delete) {
       if (dry_run) {
         message(paste("[DRY RUN] Would delete:", basename(del_folder)))
@@ -403,26 +429,18 @@ cleanup_mismatched_aois <- function(target_table, export_directory, dry_run = TR
         unlink(del_folder, recursive = TRUE)
       }
     }
-    
     if (!dry_run) message("Cleanup complete.")
-    
   } else {
     message("No mismatched folders found. Directory is clean.")
   }
-  
   return(invisible(folders_to_delete))
 }
-# test before deleting completely 
+
 cleanup_mismatched_aois(target_table = table, export_directory = export_dir, dry_run = TRUE)
 
-# 2. Once verified, run it with dry_run = FALSE to actually delete the data:
-# cleanup_mismatched_aois(target_table = table, export_directory = export_dir, dry_run = FALSE)
-
 check_orphan_aois <- function(target_table_path, export_directory, delete_orphans = FALSE) {
-  # 1. Load the sample table
   target_table <- read.csv(target_table_path)
   
-  # Check for column names (handles 'id' or 'GridID' depending on your table structure)
   if (!"id" %in% colnames(target_table)) {
     if ("GridID" %in% colnames(target_table)) {
       target_table$id <- target_table$GridID
@@ -431,7 +449,6 @@ check_orphan_aois <- function(target_table_path, export_directory, delete_orphan
     }
   }
   
-  # 2. Get a list of all directories in the export folder
   all_folders <- list.dirs(export_directory, full.names = TRUE, recursive = FALSE)
   
   if (length(all_folders) == 0) {
@@ -439,38 +456,29 @@ check_orphan_aois <- function(target_table_path, export_directory, delete_orphan
     return(invisible(NULL))
   }
   
-  # Filter for folders that match the standard "aoi_" prefix
   folder_basenames <- basename(all_folders)
   valid_folders <- all_folders[grepl("^aoi_", folder_basenames)]
   valid_basenames <- basename(valid_folders)
   
   orphaned_folders <- c()
   
-  # 3. Extract IDs and Compare
   for (i in seq_along(valid_folders)) {
     folder_path <- valid_folders[i]
     folder_name <- valid_basenames[i]
     
-    # Strip the "aoi_" prefix
     name_no_prefix <- sub("^aoi_", "", folder_name)
-    
-    # Extract the ID (everything before the final _YYYY)
     matches <- regmatches(name_no_prefix, regexec("^(.*)_([0-9]{4})$", name_no_prefix))
     
     if (length(matches[[1]]) == 3) {
       folder_id <- matches[[1]][2]
-      
-      # Check if this ID is MISSING from the target table
       if (!(as.character(folder_id) %in% as.character(target_table$id))) {
         orphaned_folders <- c(orphaned_folders, folder_path)
       }
     }
   }
   
-  # 4. Execution & Reporting
   if (length(orphaned_folders) > 0) {
     message(sprintf("Found %d orphaned folders (AOIs not in the attached file).", length(orphaned_folders)))
-    
     for (orphan in orphaned_folders) {
       if (delete_orphans) {
         message(paste("Deleting Orphan:", basename(orphan)))
@@ -479,14 +487,12 @@ check_orphan_aois <- function(target_table_path, export_directory, delete_orphan
         message(paste("Orphan Detected:", basename(orphan)))
       }
     }
-    
     if (!delete_orphans) {
       message("\nRun with `delete_orphans = TRUE` to remove these directories.")
     }
   } else {
     message("All exported AOI folders are accounted for in the target table. No orphans found.")
   }
-  
   return(invisible(orphaned_folders))
 }
 
@@ -494,9 +500,30 @@ check_orphan_aois <- function(target_table_path, export_directory, delete_orphan
 # HOW TO RUN IT
 # ==========================================
 
-# Define your paths
-csv_file <- "data/LRR_sampleGrids/selectedSample_lrr_G_draw_1400_05_2026.csv"
-export_dir <- "data/exportData" # Update this to your T7 path if currently processing locally
+export_dir <- "data/exportData" 
 
-# Run in safe mode (will only print the folders that don't match)
-check_orphan_aois(target_table_path = csv_file, export_directory = export_dir, delete_orphans = FALSE)
+check_active_orphans <- function(target_table, export_directory) {
+  all_folders <- list.dirs(export_directory, full.names = TRUE, recursive = FALSE)
+  valid_folders <- all_folders[grepl("^aoi_", basename(all_folders))]
+  
+  orphaned_folders <- c()
+  for (folder_path in valid_folders) {
+    name_no_prefix <- sub("^aoi_", "", basename(folder_path))
+    matches <- regmatches(name_no_prefix, regexec("^(.*)_([0-9]{4})$", name_no_prefix))
+    
+    if (length(matches[[1]]) == 3) {
+      folder_id <- matches[[1]][2]
+      if (!(as.character(folder_id) %in% as.character(target_table$id))) {
+        orphaned_folders <- c(orphaned_folders, folder_path)
+      }
+    }
+  }
+  
+  if (length(orphaned_folders) > 0) {
+    message(sprintf("Found %d folders in exportData that are NOT in the current processing table.", length(orphaned_folders)))
+  } else {
+    message("All folders in exportData match the current processing table.")
+  }
+}
+
+check_active_orphans(target_table = table, export_directory = export_dir)

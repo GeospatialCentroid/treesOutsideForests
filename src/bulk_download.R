@@ -1,9 +1,8 @@
 # =========================================================
 # NAIP BULK DOWNLOAD & PROCESSING PIPELINE (T7 LOCAL ADAPTATION)
 # =========================================================
-
 pacman::p_load(
-  dplyr, sf, terra, tidyr, furrr, future, tools, tictoc, rstac, jsonlite
+  dplyr, sf, terra, readr, tidyr, furrr, future, tools, tictoc, rstac, jsonlite
 )
 
 # ---------------------------------------------------------
@@ -13,12 +12,14 @@ pacman::p_load(
 lapply(list.files(path = "function", pattern = ".R", full.names = TRUE), source)
 
 # Define T7 Drive path directly for local processing
-local_working_dir <- "/run/media/dan/T7/naip_bulk_export"
+local_working_dir <- "/run/media/dan/T7/llr_F_threeYearImagery"
 dir.create(local_working_dir, showWarnings = FALSE, recursive = TRUE)
 
 message(sprintf("Initializing in local mode... Output directed to: %s", local_working_dir))
 
+# select a full area
 aoi_table <- read.csv("data/LRR_sampleGrids/selectedSample_lrr_G_draw_1400_05_2026.csv")
+
 
 # establish grid features
 g100 <- sf::st_read("data/grid100km_aea.gpkg")
@@ -27,7 +28,7 @@ g100 <- sf::st_read("data/grid100km_aea.gpkg")
 # 3. EXECUTION: BATCHING & FURRR
 # ---------------------------------------------------------
 # Manually setting workers to 10 to leave headroom for other tasks
-local_workers <- 10
+local_workers <- 2
 plan(multisession, workers = local_workers)
 message(sprintf("Parallel workers set to: %s", local_workers))
 
@@ -36,7 +37,7 @@ aoi_table <- aoi_table |>
   mutate(batch_id = ceiling(row_number() / batch_size))
 
 # testing 
-aoi_table <- aoi_table[1:10, ]
+# aoi_table <- aoi_table[1:10, ]
 
 # --- GEOSPATIAL PARAMETERS ---
 target_years <- c("2012", "2016", "2020")
