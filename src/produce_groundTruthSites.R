@@ -50,11 +50,11 @@ if(random){
   # draw 100 random samples from the change class.
   drawSubset <- TRUE
   # setting new seed for a different draw 
-  set.seed(124) # previous draws 123, 
+  set.seed(125) # previous draws 123,124  
   if(drawSubset){
     table <- readr::read_csv("data/aois_showing_change_trends.csv")|>
       dplyr::group_by(trajectory_group)|>
-      dplyr::slice_sample(n = 50)
+      dplyr::slice_sample(n = 200) # this is drawn from the two groups so the end result is double the value of this
     table$id <- table$aoi_id
   }
   
@@ -80,7 +80,7 @@ temp_dir <- file.path("data/download")
 export_dir <- file.path("data/exportData")
 
 # --- EXECUTION TOGGLES ---
-run_parallel <- FALSE # Set to TRUE for production, FALSE for sequential debugging
+run_parallel <- TRUE # Set to TRUE for production, FALSE for sequential debugging
 run_snic <- FALSE     # Set to TRUE to generate SNIC location data, FALSE to skip
 # ------------------------
 # set buffer dist (Aligned with bulk download)
@@ -92,7 +92,7 @@ if (run_parallel) {
   # ==========================================
   # PARALLEL EXECUTION
   # ==========================================
-  num_cores <- max(1, parallel::detectCores() - 30)
+  num_cores <- max(1, parallel::detectCores() - 26)
   cl <- makeCluster(num_cores)
   registerDoParallel(cl)
   cat("Starting cluster with", num_cores, "cores...\n")
