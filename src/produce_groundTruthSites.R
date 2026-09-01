@@ -4,7 +4,7 @@ pacman::p_load(dplyr, sf, terra, tidyr, tictoc, foreach, doParallel, doSNOW, sni
 # once exported can zip via terminal with the following command 
 # for d in */; do zip -r "${d%/}.zip" "$d"; done
 # this will delete the original folder 
-# for dir in */; do zip -r "${dir%/}.zip" "$dir" && rm -r "$dir"; done
+  # for dir in */; do zip -r "${dir%/}.zip" "$dir" && rm -r "$dir"; done
 
 # testing
 library(tmap)
@@ -29,7 +29,7 @@ set.seed(12486)
 
 if(random){
   # assign sample number : number of sites 
-  sites <- 50
+  sites <- 15
   
   # generate random spatial samples
   points <- sf::st_sample(x = mlra, size = sites, by_polygon = TRUE)
@@ -45,17 +45,21 @@ if(random){
 }else{
   # new table for the update datasets or specific location runs 
   # lrr_F_final60_GT_sites.csv
-  table <-  readr::read_csv("data/LRR_sampleGrids/groundTruth_ids_lrr_F_06_2026.csv")
+  table <-  readr::read_csv("data/LRR_sampleGrids/selectedSample_lrr_F_05_2026.csv")
   
   # draw 100 random samples from the change class.
-  drawSubset <- TRUE
+  drawSubset <- FALSE
+  sampleSize <- 15
   # setting new seed for a different draw 
   set.seed(125) # previous draws 123,124  
   if(drawSubset){
     table <- readr::read_csv("data/aois_showing_change_trends.csv")|>
       dplyr::group_by(trajectory_group)|>
-      dplyr::slice_sample(n = 200) # this is drawn from the two groups so the end result is double the value of this
+      dplyr::slice_sample(n = sampleSize) # this is drawn from the two groups so the end result is double the value of this
     table$id <- table$aoi_id
+  }else{
+    table <- table %>%
+      dplyr::sample_n(size = sampleSize, replace = FALSE)
   }
   
   # need to assign years - added method back to the naip scape process 
@@ -67,7 +71,7 @@ if(random){
       tidyr::expand_grid(year = years)
   } else {
     table <- table %>%
-      dplyr::mutate(year = sample(years, size = n(), replace = TRUE))
+      dplyr::mutate(year = sample(years, size = sampleSize, replace = TRUE))
   }
 }
 
