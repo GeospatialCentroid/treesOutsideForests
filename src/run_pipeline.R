@@ -100,8 +100,13 @@ cat(sprintf("Output Directory:   %s\n", export_dir))
 cat("======================================================================\n\n")
 
 # 7. Establish Parallel Cluster Configuration
-message("Starting parallel multisession cluster...")
-future::plan(future::multisession, workers = workers)
+if (workers > 1) {
+  message(sprintf("Starting parallel multisession cluster with %d workers...", workers))
+  future::plan(future::multisession, workers = workers)
+} else {
+  message("Running sequentially...")
+  future::plan(future::sequential)
+}
 
 # Ensure garbage collection is triggered on parallel workers
 options(future.rng.onMisuse = "ignore")
