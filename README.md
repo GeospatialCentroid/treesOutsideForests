@@ -1,78 +1,123 @@
-# naipScrape: High-Performance Midstream & Spatial Processing Pipeline
+# naipScrape: High-Performance Parallel Spatial Processing Pipeline
 
-A high-performance R-based spatial pipeline developed to support agroforestry sampling and machine learning workflows. This repository automates the discovery, targeted chunk-downloading, processing, and visual optimization of high-resolution **National Agriculture Imagery Program (NAIP)** multi-band data, as well as the generation of segmentations for ground truth training sites.
+A high-performance, unified R-based spatial pipeline designed for the rapid acquisition, processing, and visual optimization of high-resolution National Agriculture Imagery Program (NAIP) multi-band data, alongside Simple Non-Iterative Clustering (SNIC) superpixel segmentations.
 
-By utilizing cloud-native GeoTIFF reads over GDAL virtual file systems (`/vsicurl/`) and parallel execution, this pipeline minimizes local disk usage and network overhead, running entirely database-free via decentralized, thread-safe tracking JSONs.
+By utilizing cloud-native GeoTIFF reads over GDAL virtual file systems (/vsicurl/) and local-only parallel execution, this pipeline completely avoids the download of multi-gigabyte raw scene files, streaming only the pixels inside target Areas of Interest (AOIs).
 
 ---
 
-## 🛠️ Workflow 1: Bulk NAIP Imagery Downloader (`src/bulk_download.R`)
+## The Unified Pipeline (src/run_pipeline.R)
 
-### 📌 Core Purpose
-Designed for parallel, high-throughput acquisition of NAIP imagery across thousands of Area of Interest (AOI) grid cells. It streams only the required spatial crop of each tile directly from the **Microsoft Planetary Computer STAC API**, completely avoiding the need to download huge, multi-gigabyte raw scene files.
+The entire scraping and processing lifecycle is managed by a single entry point: src/run_pipeline.R. All configuration parameters are declared in config.yml.
 
-### 🔄 How the Pipeline Operates
-1. **Target Loading & Batching**: Loads a target coordinate/grid table (e.g., Albers Equal Area 100km subgrids) and divides it into manageable batches (default size = 50) to maintain system headroom.
-2. **Parallel Processing**: Spawns concurrent worker nodes using the `future` and `furrr` multisession engines (default = 10 workers).
-3. **Decentralized State Check**: Each worker checks for a local `status.json` file inside the AOI's target folder. If all target years are already marked successful, it immediately skips the AOI, avoiding redundant API calls.
-4. **Dynamic Year Fallback**: Queries the STAC API for available years. If a target year (e.g., `2012`, `2016`, `2020`) is missing, it dynamically falls back to adjacent years in a prioritized order (`target`, `target - 1`, `target - 2`, `target + 1`).
-5. **GDAL `/vsicurl/` Targeted Crop**: Streams only the pixels falling inside the buffered AOI using GDAL's virtual file system. Crops the raw bands on-the-fly to a specified margin (e.g., 250 meters).
-6. **Mosaicking & Resampling**: To eliminate standard coordinate origin and resolution discrepancies between different NAIP tiles, workers resample each raw cropped tile to a master 1m resolution template grid *before* mosaicking them using `terra::mosaic(fun = "mean")`.
+### How the Pipeline Operates
+1. **Unified Target Table**: Loads coordinate/grid tables (AEA 100km subgrids) dynamically based on LLR regions configured in config.yml.
+2. **Parallel Combo Expansion**: Expands target unique grid IDs and target years into fully parallelizable Site-Year combinations processed concurrently via the future/furrr multisession engine.
+3. **Decentralized State Caching**: Each task checks for a local status.json file inside the AOI's target folder. If the status is already marked successful, it immediately skips the task, providing robust, no-lock checkpointing.
+4. **Dynamic Year Fallback**: Queries the Microsoft Planetary Computer STAC API for available years. If a target year is missing, it dynamically searches fallback years in a prioritized order: [target, target - 1, target - 2, target + 1].
+5. **GDAL /vsicurl/ Targeted Crop**: Streams only the pixels falling inside the buffered AOI using GDAL virtual files. Crops the raw bands on-the-fly to a specified margin (e.g., 250 meters).
+6. **Mosaicking & Resampling**: To eliminate coordinate origin and resolution discrepancies between different NAIP tiles, workers resample each raw cropped tile to a master 1m resolution template grid before mosaicking them using terra::mosaic(fun = "mean").
 7. **Buffer Masking**: Applies a circular, rounded-corner mask using the buffered AOI geometry to isolate the exact area of interest.
 8. **QGIS Visualization Optimizations**:
-   - **Band 4 Alpha Fix**: Explicitly overrides GDAL's default behavior (which treats the 4th Near-Infrared band as a transparency mask) by calling GDAL translate to set band 4's color interpretation to `undefined`. This ensures proper color bands and NIR visibility.
-   - **Bbaked Header Stats**: Computes min-max statistics using GDAL info (`-stats`) and bakes them directly into the GeoTIFF headers. This enables QGIS to render the imagery **instantly** with perfect color stretching, without needing to scan the file.
-9. **No-Lock Status Logging**: Writes a local, pretty-printed `status.json` inside the AOI's output folder containing exact fallback years, STAC collection datetimes, and unique STAC item IDs.
+   - **Band 4 Alpha Fix**: Overrides GDAL's default behavior (which treats the 4th Near-Infrared band as a transparency mask) by setting band 4's color interpretation to undefined via GDAL translate.
+   - **Baked Header Stats**: Computes min-max statistics using GDAL info (-stats) and bakes them directly into the GeoTIFF headers. This enables QGIS to render the imagery instantly with perfect color stretching without scanning the file.
+9. **Simple Non-Iterative Clustering (SNIC)**: If enabled, executes Simple Non-Iterative Clustering (SNIC) directly on the exported NAIP raster to generate edge-aligned polygon superpixel clusters representing localized boundaries (e.g., crop, tree, or grassland).
 
-### 📂 Expected Results & Folder Structure
-```text
-/run/media/dan/T7/naip_bulk_export/
-└── naip_batch_1/
-    └── <aoi_id>/
-        ├── naip_1.5km_<aoi_id>_<actual_year>.tif  <- High-res, 4-band (RGB+NIR), QGIS-optimized, rounded mask
-        ├── aoi-<aoi_id>.gpkg                       <- Original geometry vector
-        └── status.json                             <- Decentralized progress footprint
+---
+
+## Configuration (config.yml)
+
+The pipeline reads settings from config.yml located in the root directory:
+
+```yaml
+paths:
+  # Master spatial grid (100km equal area Albers)
+  grid_gpkg: "data/grid100km_aea.gpkg"
+  
+  # MLRA boundaries for optional random spatial sampling (LRR F/G boundaries)
+  mlra_gpkg: "data/mlra/lower48MLRA.gpkg"
+  
+  # Input CSV files listing target grid IDs
+  sample_f_csv: "data/LRR_sampleGrids/selectedSample_lrr_F_05_2026.csv"
+  sample_g_csv: "data/LRR_sampleGrids/selectedSample_lrr_G_draw_1400_05_2026.csv"
+  
+  # Output directory where results will be organized directly
+  export_dir: "data/exportData"
+
+processing:
+  # Target region to process: "F" (LLR F), "G" (LLR G), or "both"
+  target_region: "both"
+
+  # Default years to query via STAC API
+  target_years: ["2012", "2016", "2020"]
+  
+  # Buffer distance in meters around the 1km grid (250m buffer yields 1.5km total width)
+  buffer_dist_m: 250
+  
+  # Feature Toggles
+  run_snic: false          # Toggle SNIC superpixel segmentation
+  export_1km_tight: false  # Save a tight 1km NAIP raster besides the buffered one
+
+parallelism:
+  # Number of multisession parallel workers to run in furrr
+  workers: 4
 ```
 
 ---
 
-## 🌲 Workflow 2: Ground Truth Training Site & SNIC Generator (`src/produce_groundTruthSites.R`)
+## Expected Directory Structure
 
-### 📌 Core Purpose
-Designed to prepare highly flexible agroforestry training sites by generating both buffered and unbuffered NAIP imagery, as well as executing **Simple Non-Iterative Clustering (SNIC) superpixel segmentation** for downstream machine learning classification.
-
-### 🔄 How the Pipeline Operates
-1. **Site Input**: Loads an established candidate training site CSV or generates random spatial samples within a Major Land Resource Area (MLRA) polygon boundaries.
-2. **Parallel Cluster Allocation**: Establishes a parallel cluster using the `foreach` and `doParallel` packages.
-3. **STAC Discovery**: For each site, queries the STAC API and resolves fallback years identically to the Bulk Downloader.
-4. **Buffered & Unbuffered Imagery Generation**:
-   - Downloads, merges, and exports a **1.5km buffered crop** (buffered by 250m) for contextual evaluation.
-   - Downloads, merges, and exports a tight **1km unbuffered crop** (no buffer) to serve as the direct modeling workspace.
-5. **SNIC Superpixel Segmentation**: 
-   Runs Simple Non-Iterative Clustering (SNIC) directly on the 1km NAIP raster using R's `snic` package. It generates cohesive, edge-aligned polygon clusters (superpixels) representing localized crop, tree, or grassland boundaries.
-6. **Data Packaging**: Collects the vectors, raw segmentations, and NAIP products, and packages them into a clean, unified export folder ready for analysis or model input.
-
-### 📂 Expected Results & Folder Structure
 ```text
 data/exportData/
 └── aoi_<aoi_id>_<actual_year>/
-    ├── naip_1.5km_<aoi_id>_<actual_year>.tif     <- Contextual buffered image (QGIS-optimized)
-    ├── naip_1km_<aoi_id>_<actual_year>.tif       <- Modeling core image (QGIS-optimized)
-    ├── snic_clusters_<aoi_id>_<actual_year>.tif   <- SNIC Superpixel segmentations
-    └── <associated geopackages & site vectors>
+    ├── naip_1.5km_<aoi_id>_<actual_year>.tif     <- Contextual buffered image (RGB+NIR, QGIS-optimized)
+    ├── naip_1km_<aoi_id>_<actual_year>.tif       <- Modeling core image (only if export_1km_tight: true)
+    ├── seg_<aoi_id>_s<spacing>_<actual_year>.gpkg <- SNIC superpixel boundaries (only if run_snic: true)
+    ├── aoi-<aoi_id>.gpkg                         <- Original 1km boundary geometry vector
+    └── status.json                               <- Decentralized run progress & STAC metadata cache
 ```
 
 ---
 
-## 📊 Progress Reporting & Utilities (`function/getSTATUS.R`)
+## Progress Reporting & Utilities (function/getSTATUS.R)
 
-Since the pipeline operates in a decentralized, database-free manner, progress can be monitored and managed using these highly efficient, on-disk utilities:
+Since the pipeline operates in a decentralized, database-free manner, progress can be monitored and managed using these built-in utilities:
 
-### 1. `compileStatus(local_working_dir)`
-Crawls your T7 drive or export folder, reads all the distributed `status.json` tracker files, and compiles them into a single, clean, flat R data frame.
-* ** Tabular Flattening**: Automatically flattens nested JSON metadata.
-* **Spreadsheet Ready**: Outputs columns such as `y1_actual_year`, `y1_capture_dates` (timestamps), `y1_item_ids`, and `y1_naip_states`.
-* **Overlap Merging**: If an AOI is covered by multiple overlapping raw scenes, their timestamps and item IDs are concatenated using semicolon-separation (e.g., `2012-07-22T18:00:00Z; 2012-07-22T19:00:00Z`), making it fully compatible with CSV exports and Excel.
+### 1. compileStatus(local_working_dir)
+Crawls your export folder, reads all the distributed status.json tracker files, and compiles them into a single, flat R data frame for tracking.
+* **Tabular Flattening**: Automatically flattens nested JSON metadata.
+* **Analysis-Ready**: Outputs columns such as actual_year, capture_dates (timestamps), item_ids, and naip_states.
 
-### 2. `clearStatus(local_working_dir)`
-Deletes all distributed `status.json` files on disk. Useful for forcing the pipeline to perform a clean retry/re-discovery across your active directories.
+### 2. clearStatus(local_working_dir)
+Deletes all distributed status.json files on disk. Useful for forcing the pipeline to perform a clean retry across active directories.
+
+---
+
+## Verification & Reproducibility (test/)
+
+To guarantee codebase stability, reproducibility, and output parity across parallel updates, the test/ directory contains complete validation tests:
+
+1. **Seed & Selection Test (test/test_seed.R)**:
+   - Confirms that setting seed 125 on selectedSample_lrr_F_05_2026.csv reliably selects the identical 15 target AOIs.
+   - Run: `Rscript test/test_seed.R`
+
+2. **Sequential vs Parallel Raster Parity (test/test_raster_comparison.R)**:
+   - Generates sequential (1 worker) and parallel (4 workers) products for test AOIs and executes a complete element-by-element verification check.
+   - Compares band names, count (4 bands), data types (INT1U), coordinate reference systems, extents, resolutions, spatial dimensions, pixel-level values (absolute maximum cell value difference is verified to be exactly 0), alpha color interpretations (ColorInterp=Undefined), and file sizes.
+   - Run: `Rscript test/test_raster_comparison.R`
+
+---
+
+## Getting Started
+
+1. **Install Dependencies**:
+   Ensure R is installed with the required packages:
+   ```R
+   install.packages("pacman")
+   pacman::p_load(yaml, dplyr, sf, terra, readr, tidyr, furrr, future, tools, tictoc, rstac, jsonlite)
+   ```
+2. **Setup config.yml**: Modify paths, target years, and parallel workers inside config.yml.
+3. **Execute**: Run the pipeline directly from your shell:
+   ```bash
+   Rscript src/run_pipeline.R
+   ```
