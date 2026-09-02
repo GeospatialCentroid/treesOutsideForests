@@ -1,0 +1,33 @@
+# Unified Pipeline Configuration for Local Execution
+paths:
+  # Master spatial grid (100km equal area Albers)
+  grid_gpkg: "data/grid100km_aea.gpkg"
+  
+  # MLRA boundaries for any optional random spatial sampling (LRR F/G boundaries)
+  mlra_gpkg: "data/mlra/lower48MLRA.gpkg"
+  
+  # Input CSV files listing target grid IDs
+  sample_f_csv: "data/LRR_sampleGrids/selectedSample_lrr_F_05_2026.csv"
+  sample_g_csv: "data/LRR_sampleGrids/selectedSample_lrr_G_draw_1400_05_2026.csv"
+  
+  # Output directory where results will be organized directly
+  export_dir: "data/exportData"
+
+processing:
+  # Target region to process: "F" (LLR F), "G" (LLR G), or "both" (processes both)
+  target_region: "both"
+
+  # Default years to query via STAC API (checks each target year and its preferred fallbacks)
+  target_years: ["2012", "2016", "2020"]
+  
+  # Buffer distance in meters around the 1km grid (250m buffer yields 1.5km total width)
+  buffer_dist_m: 250
+  
+  # Feature Toggles
+  run_snic: false          # Toggle SNIC superpixel segmentation (replaces produce_groundTruthSites toggle)
+  export_1km_tight: false  # If true, crops and saves a tight 1km NAIP raster besides the 1.5km buffered one
+
+parallelism:
+  # Number of multisession parallel workers to run in furrr
+  # Set to a safe conservative default for local execution
+  workers: 4

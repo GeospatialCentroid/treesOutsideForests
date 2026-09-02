@@ -2,7 +2,7 @@
 #'
 #' @param local_working_dir Character. Path to the local processing/export directory.
 #' @return A data frame containing all completed/partial/failed status records.
-compileStatus <- function(local_working_dir = "/run/media/dan/T7/naip_bulk_export") {
+compileStatus <- function(local_working_dir = "data/exportData") {
   status_files <- list.files(
     path = local_working_dir,
     pattern = "^status\\.json$",
@@ -73,7 +73,7 @@ compileStatus <- function(local_working_dir = "/run/media/dan/T7/naip_bulk_expor
 #' Clear all JSON status trackers on disk
 #'
 #' @param local_working_dir Character. Path to the local processing/export directory.
-clearStatus <- function(local_working_dir = "/run/media/dan/T7/naip_bulk_export") {
+clearStatus <- function(local_working_dir = "data/exportData") {
   status_files <- list.files(
     path = local_working_dir,
     pattern = "^status\\.json$",

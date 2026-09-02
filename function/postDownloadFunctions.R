@@ -49,7 +49,7 @@ mergeAndExportNAIP <- function(files, out_path, aoi, year, buffer_m = 250, buffe
   
   # Generate a template raster (1m resolution)
   temp <- terra::rast(
-    extent = ext(aoi_buf_proj),
+    extent = terra::ext(aoi_buf_proj),
     crs = master_crs,
     nlyrs = 4,
     resolution = 1
@@ -99,12 +99,12 @@ mergeAndExportLidar <- function(files, out_path, aoi) {
   # get a template rast for CRS information
   r1 <- terra::rast(files[1])
   # reprojecthe aoi object
-  aoi_proj <- terra::project(terra::vect(aoi), crs(r1))
+  aoi_proj <- terra::project(terra::vect(aoi), terra::crs(r1))
 
   # generate a template
   temp <- terra::rast(
-    extent = ext(aoi_proj),
-    crs = crs(aoi_proj),
+    extent = terra::ext(aoi_proj),
+    crs = terra::crs(aoi_proj),
     nlyrs = 1,
     resolution = terra::res(r1)[1] # pull from the lidar image
   )

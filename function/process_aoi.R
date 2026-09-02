@@ -1,21 +1,24 @@
+# =========================================================
+# Streamlined AOI Image Processing Worker Core
+# =========================================================
+
 process_aoi <- function(
     aoi_id,
-    target_years,
-    local_dir,
+    target_year,
     g100_grid,
-    batch_id,
-    network_dir,
+    export_dir = "data/exportData",
     buffer_m = 250,
+    run_snic = FALSE,
+    export_1km_tight = FALSE,
     p = NULL
 ) {
   # --- 1. JITTER FOR RATE LIMITING ---
-  # Force the worker to sleep for a random time between 0.5 and 3.0 seconds.
-  # This staggers the Planetary Computer API hits to avoid rate limits.
+  # Staggers parallel Planetary Computer API requests to avoid overloading/rate-limiting
   Sys.sleep(runif(1, min = 0.5, max = 3.0))
   
-  # 2. Isolate Terra Temp Directories
-  worker_temp <- file.path(tempdir(), paste0("terra_worker_", Sys.getpid()))
-  dir.create(worker_temp, showWarnings = FALSE)
+  # --- 2. ISOLATED WORKER SCRATCH DIRECTORY ---
+  worker_temp <- file.path(tempdir(), paste0("terra_worker_", Sys.getpid(), "_", sample(100000:999999, 1)))
+  dir.create(worker_temp, showWarnings = FALSE, recursive = TRUE)
   terra::terraOptions(tempdir = worker_temp)
   
   on.exit(
@@ -25,296 +28,167 @@ process_aoi <- function(
     add = TRUE
   )
   
-  # 3. Create Flat Output Directory & Status Path
-  aoi_folder <- file.path(local_dir, aoi_id)
+  # --- 3. DYNAMIC AOI FETCHING ---
+  aoi <- tryCatch({
+    getAOI(grid100 = g100_grid, id = aoi_id)
+  }, error = function(e) NULL)
+  
+  if (is.null(aoi)) {
+    if (!is.null(p)) p(step = 1, message = sprintf("Failed Geom %s", aoi_id))
+    return(list(
+      aoi_id = aoi_id,
+      target_year = target_year,
+      status = "Failed: Missing/Timeout AOI Geometry"
+    ))
+  }
+  
+  id <- aoi$id
+  
+  # --- 4. API YEAR CHECK & FALLBACK HANDLING ---
+  years_available <- tryCatch({
+    getNAIPYear(aoi)
+  }, error = function(e) NULL)
+  
+  if (is.null(years_available)) {
+    if (!is.null(p)) p(step = 1, message = sprintf("Failed STAC API %s", aoi_id))
+    return(list(
+      aoi_id = aoi_id,
+      target_year = target_year,
+      status = "Failed: STAC API Metadata Error"
+    ))
+  }
+  
+  target_num <- as.numeric(target_year)
+  preferred_years <- as.character(c(
+    target_num,      # Preference 1: Target Year
+    target_num - 1,  # Preference 2: Target Year - 1
+    target_num - 2,  # Preference 3: Target Year - 2
+    target_num + 1   # Preference 4: Target Year + 1
+  ))
+  
+  actual_year <- NULL
+  for (test_year in preferred_years) {
+    if (test_year %in% years_available) {
+      actual_year <- test_year
+      break 
+    }
+  }
+  
+  if (is.null(actual_year)) {
+    if (!is.null(p)) p(step = 1, message = sprintf("Failed Year Search %s", aoi_id))
+    return(list(
+      aoi_id = aoi_id,
+      target_year = target_year,
+      status = "Failed: No NAIP imagery found within fallback range"
+    ))
+  }
+  
+  # --- 5. DEFINE YEAR-SPECIFIC AOI EXPORT FOLDER ---
+  aoi_folder <- file.path(export_dir, paste0("aoi_", id, "_", actual_year))
   status_file <- file.path(aoi_folder, "status.json")
   
-  # --- 4. SMART RETRY LOGIC (JSON File Based) ---
-  years_to_process <- target_years
-  year_statuses <- list()
-  year_metas <- list()
-  
+  # Check for existing completed status.json
   if (file.exists(status_file)) {
-    # Read and parse status JSON
     check <- tryCatch({
       jsonlite::fromJSON(status_file)
     }, error = function(e) NULL)
     
-    if (!is.null(check)) {
-      y1_ok <- !is.null(check$year_1) && (check$year_1 == "Success" || grepl("Skipped", check$year_1))
-      y2_ok <- !is.null(check$year_2) && (check$year_2 == "Success" || grepl("Skipped", check$year_2))
-      y3_ok <- !is.null(check$year_3) && (check$year_3 == "Success" || grepl("Skipped", check$year_3))
-      
-      # Retain previously loaded metadata if present
-      if (!is.null(check$year_1_meta)) year_metas[[target_years[1]]] <- check$year_1_meta
-      if (!is.null(check$year_2_meta)) year_metas[[target_years[2]]] <- check$year_2_meta
-      if (!is.null(check$year_3_meta)) year_metas[[target_years[3]]] <- check$year_3_meta
-      
-      # If all three are good, we can completely skip this AOI
-      if (y1_ok && y2_ok && y3_ok) {
-        if (!is.null(p)) {
-          p(step = 1, message = sprintf("Skipped (All Complete) %s", aoi_id))
-        }
-        return(list(
-          aoi_id = aoi_id,
-          batch_id = batch_id,
-          year_1 = check$year_1,
-          year_2 = check$year_2,
-          year_3 = check$year_3,
-          status = "Complete",
-          year_1_meta = check$year_1_meta,
-          year_2_meta = check$year_2_meta,
-          year_3_meta = check$year_3_meta
-        ))
-      }
-      
-      # Otherwise, preserve the good statuses and filter the years we actually need to process
-      year_statuses[[target_years[1]]] <- check$year_1
-      year_statuses[[target_years[2]]] <- check$year_2
-      year_statuses[[target_years[3]]] <- check$year_3
-      
-      years_to_process <- target_years[!c(y1_ok, y2_ok, y3_ok)]
+    if (!is.null(check) && check$status == "Success") {
+      if (!is.null(p)) p(step = 1, message = sprintf("Skipped %s (%s)", aoi_id, actual_year))
+      return(check)
     }
   }
   
-  # Ensure AOI folder is created
   dir.create(aoi_folder, showWarnings = FALSE, recursive = TRUE)
   
-  # --- PROTECTED API QUERIES ---
-  current_step <- "Fetching AOI Geometry"
-  aoi <- tryCatch({
-    R.utils::withTimeout({
-      getAOI(grid100 = g100_grid, id = aoi_id)
-    }, timeout = 120, onTimeout = "error")
-  }, error = function(e) return(NULL))
-  
-  if (is.null(aoi)) {
-    if (!is.null(p)) p(step = 1, message = sprintf("Failed Geom %s", aoi_id))
-    
-    res <- list(
-      aoi_id = aoi_id,
-      batch_id = batch_id,
-      year_1 = "Failed",
-      year_2 = "Failed",
-      year_3 = "Failed",
-      status = "Failed: Missing/Timeout AOI Geometry",
-      year_1_meta = year_metas[[target_years[1]]],
-      year_2_meta = year_metas[[target_years[2]]],
-      year_3_meta = year_metas[[target_years[3]]]
+  # --- 6. EXECUTION ---
+  process_status <- tryCatch({
+    # Download raw intersecting tiles cropped on-the-fly via Planetary Computer vsicurl
+    tile_meta <- downloadNAIP_vsi(
+      aoi = aoi,
+      year = actual_year,
+      exportFolder = worker_temp,
+      buffer_m = buffer_m
     )
-    writeLines(jsonlite::toJSON(res, auto_unbox = TRUE, pretty = TRUE), status_file)
-    return(res)
-  }
-  
-  # Gather all available years with protection
-  current_step <- "Fetching NAIP Metadata/Years"
-  years_available <- tryCatch({
-    R.utils::withTimeout({
-      getNAIPYear(aoi)
-    }, timeout = 120, onTimeout = "error")
-  }, error = function(e) return(NULL))
-  
-  if (is.null(years_available)) {
-    if (!is.null(p)) p(step = 1, message = sprintf("Failed Metadata %s", aoi_id))
     
-    res <- list(
-      aoi_id = aoi_id,
-      batch_id = batch_id,
-      year_1 = "Failed",
-      year_2 = "Failed",
-      year_3 = "Failed",
-      status = "Failed: API Timeout on Metadata",
-      year_1_meta = year_metas[[target_years[1]]],
-      year_2_meta = year_metas[[target_years[2]]],
-      year_3_meta = year_metas[[target_years[3]]]
+    # Regex matching downloaded raw tiles in thread temp dir
+    naip_string <- paste0("^naip_", actual_year, "_id_", id, "_[0-9]+\\.tif$")
+    naip_files <- list.files(path = worker_temp, pattern = naip_string, full.names = TRUE)
+    
+    if (length(naip_files) == 0) {
+      stop("Download succeeded, but no raw files matched the search regex pattern on disk.")
+    }
+    
+    # Crop, resample, mosaic, mask, and export directly to year-specific output folder
+    mergeAndExportNAIP(
+      files = naip_files,
+      out_path = aoi_folder,
+      aoi = aoi,
+      year = actual_year,
+      buffer_m = buffer_m,
+      buffer_only = !export_1km_tight
     )
-    writeLines(jsonlite::toJSON(res, auto_unbox = TRUE, pretty = TRUE), status_file)
-    return(res)
-  }
-  # 6. Process ONLY the missing/failed years
-  for (target_year in years_to_process) {
-    tryCatch(
-      {
-        # --- NEW TIMEOUT WRAPPER: 4 Minutes (240 seconds) per year ---
-        R.utils::withTimeout({
-          
-          # --- IF NOT SKIPPED, PROCEED TO API QUERY ---
-          current_step <- "STAC API Query for availability"
-          
-          # Define the exact testing hierarchy
-          target_num <- as.numeric(target_year)
-          preferred_years <- as.character(c(
-            target_num, # 2. Test initial year (e.g., 2012)
-            target_num - 1, # 3. Move one year down (e.g., 2011)
-            target_num - 2, # 4. Move two years down (e.g., 2010)
-            target_num + 1 # 5. Move one year up (e.g., 2013)
-          ))
-          
-          actual_year <- NULL
-          
-          # Check each year in our preferred order
-          for (test_year in preferred_years) {
-            if (test_year %in% years_available) {
-              actual_year <- test_year
-              break # Match found! Exit this search loop immediately.
-            }
-          }
-          
-          # 6. Cancel attempt and log to SQL if no imagery was found
-          if (is.null(actual_year)) {
-            stop(sprintf(
-              "Target %s not found. Fallbacks (%s, %s, %s) also completely missing from Planetary Computer.",
-              target_year,
-              preferred_years[2],
-              preferred_years[3],
-              preferred_years[4]
-            ))
-          }
-          
-          # --- PAUSE & RETRY LOGIC ---
-          current_step <- paste("Downloading VSI tiles for", actual_year)
-          
-          max_retries <- 3
-          retry_count <- 0
-          download_success <- FALSE
-          
-          tile_meta <- NULL
-          while (!download_success && retry_count < max_retries) {
-            tryCatch(
-              {
-                tile_meta <- downloadNAIP_vsi(
-                  aoi = aoi,
-                  year = actual_year,
-                  exportFolder = worker_temp,
-                  buffer_m = buffer_m
-                )
-                download_success <- TRUE # If it gets here, it worked!
-              },
-              error = function(api_err) {
-                retry_count <<- retry_count + 1
-                if (retry_count < max_retries) {
-                  # Pause for 15 to 45 seconds to let the Planetary Computer API cool down
-                  Sys.sleep(runif(1, min = 15, max = 45))
-                } else {
-                  # If we failed 3 times, pass the error up to the main tryCatch to fail the year
-                  stop(paste("API Timeout after 3 attempts:", api_err$message))
-                }
-              }
-            )
-          }
-          
-          # --- STRICT REGEX FIX ---
-          current_step <- "Regex gathering downloaded raw tiles"
-          
-          # Uses explicit underscores and boundaries to prevent "1" from matching "12"
-          naip_string <- paste0(
-            "^naip_",
-            actual_year,
-            "_id_",
-            aoi_id,
-            "_[0-9]+\\.tif$"
-          )
-          
-          naip_files <- list.files(
-            path = worker_temp,
-            pattern = naip_string,
-            full.names = TRUE
-          )
-          
-          if (length(naip_files) == 0) {
-            stop("Download succeeded, but no files matched regex.")
-          }
-          
-          current_step <- "Merging and exporting 2km NAIP"
-          mergeAndExportNAIP(
-            files = naip_files,
-            out_path = aoi_folder,
-            aoi = aoi,
-            year = actual_year,
-            buffer_m = buffer_m,
-            buffer_only = TRUE
-          )
-          
-          year_statuses[[target_year]] <- "Success"
-          
-          # Store exact fallback year and collection metadata
-          year_metas[[target_year]] <- list(
-            actual_year   = actual_year,
-            capture_dates = tile_meta$collection_date,
-            item_ids      = tile_meta$item_id,
-            naip_states   = tile_meta$naip_state
-          )
-          
-          file.remove(naip_files)
-          terra::tmpFiles(remove = TRUE)
-          gc(reset = TRUE, full = TRUE)
-          
-        }, timeout = 240, onTimeout = "error")
-        # --- END TIMEOUT WRAPPER ---
-      },
-      TimeoutException = function(ex) {
-        # Catch the 4-minute timeout specifically
-        year_statuses[[target_year]] <<- paste0(
-          "Failed at [",
-          current_step,
-          "]: Exceeded 4-minute time limit."
-        )
-        terra::tmpFiles(remove = TRUE)
-        gc(reset = TRUE, full = TRUE)
-      },
-      error = function(e) {
-        # Catch all standard errors
-        year_statuses[[target_year]] <<- paste0(
-          "Failed at [",
-          current_step,
-          "]: ",
-          e$message
-        )
-        terra::tmpFiles(remove = TRUE)
-        gc(reset = TRUE, full = TRUE)
+    
+    # Force strict 8-bit unsigned integer (INT1U) alignment and pre-calculate stats for QGIS zero-lag
+    r1_pattern <- paste0("naip_.*", id, "_", actual_year, "\\.tif$")
+    r1_paths <- list.files(path = aoi_folder, pattern = r1_pattern, full.names = TRUE)
+    
+    for (r1_path in r1_paths) {
+      r1_align <- terra::rast(r1_path)
+      r1_max <- max(terra::minmax(r1_align)[2, ], na.rm = TRUE)
+      
+      if (any(terra::datatype(r1_align) != "INT1U") || r1_max > 255) {
+        if (r1_max > 255) {
+          r1_align <- terra::stretch(r1_align, minv = 0, maxv = 255)
+        }
+        terra::writeRaster(r1_align, filename = r1_path, datatype = "INT1U", overwrite = TRUE)
+        fix_alpha_band(r1_path)
       }
+    }
+    
+    # Optionally generate and write SNIC segmentations
+    if (run_snic) {
+      # Use the primary exported raster (usually the 1.5km buffered output)
+      source_raster_path <- r1_paths[1]
+      r1 <- terra::rast(source_raster_path)
+      seeds <- generate_scaled_seeds(r = r1)
+      process_segmentations(
+        r = r1,
+        seed_list = seeds,
+        output_dir = aoi_folder,
+        file_id = id,
+        aoi = aoi,
+        year = actual_year
+      )
+    }
+    
+    # Success footprint
+    res <- list(
+      aoi_id = aoi_id,
+      target_year = target_year,
+      actual_year = actual_year,
+      status = "Success",
+      capture_dates = paste(tile_meta$collection_date, collapse = "; "),
+      item_ids = paste(tile_meta$item_id, collapse = "; "),
+      naip_states = paste(tile_meta$naip_state, collapse = "; ")
     )
-  }
+    
+    writeLines(jsonlite::toJSON(res, auto_unbox = TRUE, pretty = TRUE), status_file)
+    if (!is.null(p)) p(step = 1, message = sprintf("Finished %s (%s)", aoi_id, actual_year))
+    return(res)
+    
+  }, error = function(e) {
+    # Failure footprint
+    res <- list(
+      aoi_id = aoi_id,
+      target_year = target_year,
+      actual_year = ifelse(exists("actual_year") && !is.null(actual_year), actual_year, "Unknown"),
+      status = paste("Failed:", e$message)
+    )
+    writeLines(jsonlite::toJSON(res, auto_unbox = TRUE, pretty = TRUE), status_file)
+    if (!is.null(p)) p(step = 1, message = sprintf("Failed %s (%s)", aoi_id, target_year))
+    return(res)
+  })
   
-  # Safely extract the statuses, defaulting to "Failed" if they somehow remained NULL
-  s1 <- if (is.null(year_statuses[[target_years[1]]])) {
-    "Failed"
-  } else {
-    year_statuses[[target_years[1]]]
-  }
-  s2 <- if (is.null(year_statuses[[target_years[2]]])) {
-    "Failed"
-  } else {
-    year_statuses[[target_years[2]]]
-  }
-  s3 <- if (is.null(year_statuses[[target_years[3]]])) {
-    "Failed"
-  } else {
-    year_statuses[[target_years[3]]]
-  }
-  
-  # Check if all three years are either Success or safely skipped
-  is_complete <- all(
-    c(s1, s2, s3) %in%
-      c("Success", "Skipped - Exists", "Skipped - All Years Complete")
-  )
-  final_status <- ifelse(is_complete, "Complete", "Partial")
-  
-  if (!is.null(p)) {
-    p(step = 1, message = sprintf("Finished %s", aoi_id))
-  }
-  
-  res <- list(
-    aoi_id = aoi_id,
-    batch_id = batch_id,
-    year_1 = s1,
-    year_2 = s2,
-    year_3 = s3,
-    status = final_status,
-    year_1_meta = year_metas[[target_years[1]]],
-    year_2_meta = year_metas[[target_years[2]]],
-    year_3_meta = year_metas[[target_years[3]]]
-  )
-  writeLines(jsonlite::toJSON(res, auto_unbox = TRUE, pretty = TRUE), status_file)
-  return(res)
+  return(process_status)
 }

@@ -11,8 +11,9 @@
 .Rproj.user/
 
 # --- Data and Large Files ---
-# Ignore all data directories by default
-data/
+# Ignore everything under data/ except for required input files and folders
+data/**
+
 output/
 temp/
 documentation/fileTransfer.Rmd
@@ -56,4 +57,15 @@ Thumbs.db
 mnt/
 # local config settings 
 config.yml
+
+# --- Required Input Files (Override All Ignores) ---
+!config.yml
+!data/
+!data/grid100km_aea.gpkg
+!data/mlra/
+!data/mlra/lower48MLRA.gpkg
+!data/LRR_sampleGrids/
+!data/LRR_sampleGrids/selectedSample_lrr_F_05_2026.csv
+!data/LRR_sampleGrids/selectedSample_lrr_G_draw_1400_05_2026.csv
+!data/LRR_sampleGrids/groundTruth_ids_lrr_F_06_2026.csv
 
