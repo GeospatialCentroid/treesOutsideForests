@@ -8,10 +8,16 @@ buildGrids <- function(extent_object, cell_size) {
     x = ea,
     cellsize = cell_size
   )
+  # as.character(), not format(): as.hexmode() returns an integer vector that
+  # only *prints* as hex, so the no-parent branch survives in memory but is
+  # written to GeoPackage as a number - cell "a" reads back as 10, "10" reads
+  # back as 16 - and a grid regenerated through it would no longer match the hex
+  # ids used everywhere else. format() would fix the type but zero-pads to a
+  # common width ("0a"), which does not match the existing unpadded ids.
   if ("id" %in% names(ea)) {
-    ids <- paste0(ea$id[1], "-", as.hexmode(1:length(grid)))
+    ids <- paste0(ea$id[1], "-", as.character(as.hexmode(1:length(grid))))
   } else {
-    ids = as.hexmode(1:length(grid))
+    ids <- as.character(as.hexmode(1:length(grid)))
   }
   # generate ID
   gridID <- sf::st_sf(
