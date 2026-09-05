@@ -23,6 +23,10 @@ if (!exists("get_census_places") || !exists("crop_mask_nlcd")) {
 #' @param cache_path Path to the GPKG cache file.
 #' @return sf object of 1km grid geometries.
 get_sample_grids <- function(sample_ids, grid100km, cache_path = "data/processed/llr_grids_sample.gpkg") {
+  # The sample table can repeat an id; compare and report against the distinct
+  # set so that "generated N of M" is not misread as N - M missing grids.
+  sample_ids <- unique(sample_ids)
+
   if (file.exists(cache_path)) {
     cached_grids <- sf::st_read(cache_path, quiet = TRUE)
     # Ensure all requested sample_ids are present in the cached geometries
@@ -34,11 +38,19 @@ get_sample_grids <- function(sample_ids, grid100km, cache_path = "data/processed
     }
   }
   
-  message(paste("\n--- Hierarchically generating 1km grid geometries for", length(sample_ids), "sample IDs ---"))
+  message(paste("\n--- Hierarchically generating 1km grid geometries for", length(sample_ids), "unique sample IDs ---"))
   
   # Parse hierarchy levels from sample_ids to drastically reduce generated subgrid search space
   id_parts <- strsplit(sample_ids, "-")
-  
+
+  # Every id must resolve to five levels (100km-50km-10km-2km-1km); a short id
+  # would otherwise produce an "NA" parent and be dropped without explanation.
+  bad_ids <- sample_ids[lengths(id_parts) != 5]
+  if (length(bad_ids) > 0) {
+    stop(paste0("Malformed sample id(s) - expected 5 hyphen-separated levels: ",
+                paste(head(bad_ids, 10), collapse = ", ")))
+  }
+
   id100_all <- unique(sapply(id_parts, function(x) x[1]))
   id50_all  <- unique(sapply(id_parts, function(x) paste(x[1], x[2], sep="-")))
   id10_all  <- unique(sapply(id_parts, function(x) paste(x[1], x[2], x[3], sep="-")))
@@ -70,7 +82,17 @@ get_sample_grids <- function(sample_ids, grid100km, cache_path = "data/processed
   sample_grids <- buildSubGrids(grids = g2, cell_size = 1000, aoi = g2) |>
     dplyr::filter(id %in% sample_ids)
   
-  message(paste("Successfully generated geometries for", nrow(sample_grids), "out of", length(sample_ids), "sample grids."))
+  message(paste("Successfully generated geometries for", nrow(sample_grids), "out of", length(sample_ids), "unique sample grids."))
+
+  # Missing geometries mean the sample silently shrinks. Surface them rather
+  # than letting the run continue against an incomplete grid set.
+  missing_ids <- setdiff(sample_ids, sample_grids$id)
+  if (length(missing_ids) > 0) {
+    warning(paste0(
+      "No geometry generated for ", length(missing_ids), " sample id(s); they will be excluded. First few: ",
+      paste(head(missing_ids, 10), collapse = ", ")
+    ), call. = FALSE, immediate. = TRUE)
+  }
   
   # Save to cache geopackage
   out_dir <- dirname(cache_path)
@@ -86,19 +108,21 @@ get_sample_grids <- function(sample_ids, grid100km, cache_path = "data/processed
 #' Processes a single grid row by cropping, projecting, and vectorizing the pre-classified NLCD
 #' and the Census Places for a given year.
 #'
-#' @param grid_row Single-row sf grid feature with geometry column `geom`.
+#' @param grid_row Single-row sf grid feature.
 #' @param nlcd_path Path to the binary NLCD GeoTIFF.
 #' @param census_llr sf Census Places dataset in its native CRS.
 #' @param out_dir Directory to save processed files.
 #' @param year Integer/character processing year.
-#' @param template_res Numeric vector representing the resolution of template_rast.
-#' @param template_crs Character representation of the projection CRS of template_rast.
+#' @param template_res Numeric resolution of the output template raster.
+#' @param template_crs Character CRS of the output template raster.
+#' @param crop_margin Numeric margin (map units) added to the crop extent.
+#' @param log_dir Directory for per-grid failure logs.
 #' @return Logical indicating success.
-process_grid <- function(grid_row, nlcd_path, census_llr, out_dir, year, template_res, template_crs) {
+process_grid <- function(grid_row, nlcd_path, census_llr, out_dir, year,
+                         template_res, template_crs, crop_margin = 30,
+                         log_dir = "outputs/logs") {
+  grid_id <- grid_row$id
   tryCatch({
-    grid_id <- grid_row$id
-    geom_5070 <- sf::st_geometry(grid_row)
-    
     # Output file paths
     nlcd_gpkg_out <- file.path(out_dir, sprintf("%s_%s_NLCD_Forest.gpkg", grid_id, year))
     census_gpkg_out <- file.path(out_dir, sprintf("%s_%s_Census.gpkg", grid_id, year))
@@ -108,7 +132,7 @@ process_grid <- function(grid_row, nlcd_path, census_llr, out_dir, year, templat
       return(TRUE)
     }
     
-    # Dynamically generate template raster using characteristics from global template_rast passed from master session
+    # Dynamically generate template raster covering exactly the grid extent
     grid_template <- terra::rast(terra::ext(grid_row), resolution = template_res, crs = template_crs)
     
     # 1. Process NLCD
@@ -116,8 +140,18 @@ process_grid <- function(grid_row, nlcd_path, census_llr, out_dir, year, templat
     nlcd_llr <- terra::rast(nlcd_path)
     
     # Crop NLCD using grid boundary in NLCD CRS (do not reproject NLCD before crop!)
+    #
+    # snap = "out" is required: the default ("near") snaps the crop extent to the
+    # nearest cell boundary, which rounds *inward* whenever the grid edge falls
+    # inside a source cell. Reprojecting that under-sized crop onto the 1m
+    # template leaves a NA strip up to one source cell wide along the grid
+    # edges - measured at 1-3% of every output mask - so forest inside the strip
+    # is silently dropped. The extra margin absorbs the datum shift between the
+    # NLCD grid (Albers on WGS84) and the analysis CRS (Albers on NAD83).
     grid_nlcd <- sf::st_transform(grid_row, terra::crs(nlcd_llr))
-    nlcd_crop <- terra::crop(nlcd_llr, terra::ext(grid_nlcd))
+    crop_ext <- terra::ext(grid_nlcd)
+    if (crop_margin > 0) crop_ext <- terra::extend(crop_ext, crop_margin)
+    nlcd_crop <- terra::crop(nlcd_llr, crop_ext, snap = "out")
     
     # Project cropped NLCD to the template raster (resample 30m to 1m)
     nlcd_proj <- terra::project(nlcd_crop, grid_template, method = "near")
@@ -132,7 +166,19 @@ process_grid <- function(grid_row, nlcd_path, census_llr, out_dir, year, templat
     # 2. Process Census (clip to grid geometry)
     # Reproject 1km grid to native CRS of the census vector (do not reproject census before crop!)
     grid_native <- sf::st_transform(grid_row, sf::st_crs(census_llr))
-    census_crop <- sf::st_intersection(census_llr, sf::st_geometry(grid_native))
+    census_crop <- suppressWarnings(
+      sf::st_intersection(census_llr, sf::st_geometry(grid_native))
+    )
+
+    # An intersection that only touches a boundary yields points or lines, and a
+    # mixed-type layer cannot be written to GeoPackage. Keep polygonal parts
+    # only and cast to a single type so every output has a stable schema.
+    if (nrow(census_crop) > 0) {
+      census_crop <- suppressWarnings(sf::st_collection_extract(census_crop, "POLYGON"))
+    }
+    if (nrow(census_crop) > 0) {
+      census_crop <- sf::st_cast(census_crop, "MULTIPOLYGON", warn = FALSE)
+    }
     
     # Reproject cropped census features back to template CRS
     census_aea <- sf::st_transform(census_crop, template_crs)
@@ -142,7 +188,21 @@ process_grid <- function(grid_row, nlcd_path, census_llr, out_dir, year, templat
     
     return(TRUE)
   }, error = function(e) {
-    message(sprintf("Failed processing grid %s for year %s: %s", grid_row$id, year, e$message))
+    # Workers run in separate sessions, where message() output is discarded.
+    # Write one file per failure instead: no shared handle, so no lock or race,
+    # and the failure count is just the number of files in log_dir.
+    tryCatch({
+      if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
+      writeLines(
+        c(
+          paste("grid_id:", grid_id),
+          paste("year:", year),
+          paste("time:", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+          paste("error:", conditionMessage(e))
+        ),
+        file.path(log_dir, sprintf("fail_%s_%s.txt", grid_id, year))
+      )
+    }, error = function(e2) NULL)
     return(FALSE)
   })
 }
@@ -154,7 +214,14 @@ process_grid <- function(grid_row, nlcd_path, census_llr, out_dir, year, templat
 #' @param year Integer year to process.
 #' @param sample_grids sf collection of 1km sample grids.
 #' @param output_base Directory to save final products.
-run_pipeline_year <- function(year, sample_grids, output_base = "outputs/forest_masks") {
+#' @param template_res Numeric resolution of the output template raster.
+#' @param template_crs Character CRS of the output template raster.
+#' @param crop_margin Numeric margin (map units) added to each per-grid crop.
+#' @param log_dir Directory for per-grid failure logs.
+#' @return Logical indicating whether the year was processed.
+run_pipeline_year <- function(year, sample_grids, output_base = "outputs/forest_masks",
+                              template_res = 1, template_crs = "EPSG:5070",
+                              crop_margin = 30, log_dir = "outputs/logs") {
   message(paste("\n========================================================="))
   message(paste("Starting Grid-Scale Pipeline for Year:", year))
   message(paste("========================================================="))
@@ -162,6 +229,7 @@ run_pipeline_year <- function(year, sample_grids, output_base = "outputs/forest_
   # Ensure output directory exists
   year_out_dir <- file.path(output_base, as.character(year))
   if (!dir.exists(year_out_dir)) dir.create(year_out_dir, recursive = TRUE)
+  if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
   
   # 1. Verify inputs exist
   nlcd_path <- file.path("data/processed/NLCD", paste0("Annual_NLCD_LndCov_", year, "_binary.tif"))
@@ -180,38 +248,37 @@ run_pipeline_year <- function(year, sample_grids, output_base = "outputs/forest_
   message("Loading Census dataset...")
   census_llr <- sf::st_read(census_path, quiet = TRUE)
   
-  # Extract characteristics from global template_rast (on master session)
-  template_res <- terra::res(template_rast)
-  template_crs <- terra::crs(template_rast)
-  
-  # 3. Setup Parallel Execution Plan
-  num_cores <- min(parallel::detectCores() - 2, 8) # Cap workers at 8 to prevent memory exhaustion
-  if (num_cores < 1) num_cores <- 1
-  message(paste("Setting up parallel cluster with", num_cores, "workers..."))
-  future::plan(future::multisession, workers = num_cores)
-  
-  # 4. Split grids into list for furrr mapping
-  grid_list <- split(sample_grids, seq(nrow(sample_grids)))
-  
-  message(paste("Processing", length(grid_list), "grids in parallel..."))
+  # 3. Map over row indices rather than a pre-split list. split() on a
+  # 15k-row sf object costs several seconds and inflates 12MB of geometry into
+  # ~110MB of single-row data frames, all of which is then serialised out to
+  # the workers.
+  n_grids <- nrow(sample_grids)
+  message(paste("Processing", n_grids, "grids in parallel..."))
   
   # Track execution time
   start_time <- Sys.time()
   
   results <- furrr::future_map_lgl(
-    .x = grid_list,
-    .f = function(grid_row) {
+    .x = seq_len(n_grids),
+    .f = function(i) {
       process_grid(
-        grid_row = grid_row,
+        grid_row = sample_grids[i, ],
         nlcd_path = nlcd_path,
         census_llr = census_llr,
         out_dir = year_out_dir,
         year = year,
         template_res = template_res,
-        template_crs = template_crs
+        template_crs = template_crs,
+        crop_margin = crop_margin,
+        log_dir = log_dir
       )
     },
-    .options = furrr_options(seed = TRUE)
+    # Workers are fresh R sessions where sf/terra are not attached. Without
+    # them, `sample_grids[i, ]` falls back to `[.data.frame`, which drops the
+    # sf_column attribute; the result still claims class "sf" but terra's
+    # coercion sees no geometry and fails on a NULL. Declaring the packages
+    # makes the worker environment explicit instead of relying on that.
+    .options = furrr::furrr_options(seed = TRUE, packages = c("sf", "terra"))
   )
   
   end_time <- Sys.time()
@@ -220,9 +287,13 @@ run_pipeline_year <- function(year, sample_grids, output_base = "outputs/forest_
   success_count <- sum(results)
   message(sprintf("Completed Year %s: %d / %d grids processed successfully in %.2f minutes.", 
                   year, success_count, length(results), duration))
-  
-  # Reset future plan
-  future::plan(future::sequential)
+
+  failed_ids <- sample_grids$id[!results]
+  if (length(failed_ids) > 0) {
+    message(sprintf("  %d grid(s) failed; see %s (first few: %s)",
+                    length(failed_ids), log_dir,
+                    paste(head(failed_ids, 5), collapse = ", ")))
+  }
   
   return(TRUE)
 }
@@ -234,10 +305,45 @@ run_pipeline_year <- function(year, sample_grids, output_base = "outputs/forest_
 # 1. Generate the grid geometries for our target sample IDs
 sample_ids <- sampleIDs$id
 llr_grids <- get_sample_grids(sample_ids = sample_ids, grid100km = grid100km)
-llr_grids <- llr_grids[1:80, ]
-# 2. Run the pipeline for each target year defined in 00_global_init.R
+
+# Optional smoke-test subset. grid_limit is NULL for a full run; set it in
+# 00_global_init.R to process only the first N grids. Previously this was a
+# hard-coded `llr_grids[1:80, ]`, which silently reduced a 15,380-grid run to 80.
+grid_limit <- get0("grid_limit", ifnotfound = NULL)
+if (!is.null(grid_limit)) {
+  n_keep <- min(as.integer(grid_limit), nrow(llr_grids))
+  warning(paste0("grid_limit is set: processing only the first ", n_keep,
+                 " of ", nrow(llr_grids), " grids. This is a partial run."),
+          call. = FALSE, immediate. = TRUE)
+  llr_grids <- llr_grids[seq_len(n_keep), ]
+}
+
+# 2. Set up the parallel plan once for the whole run. Re-planning inside the
+# year loop tears down and respawns the worker sessions for every year.
+num_cores <- parallel::detectCores()
+if (is.na(num_cores)) num_cores <- 1L
+num_cores <- max(1L, min(num_cores - 2L, 8L)) # Cap workers to limit memory use
+message(paste("Setting up parallel cluster with", num_cores, "workers..."))
+future::plan(future::multisession, workers = num_cores)
+
+# 3. Run the pipeline for each target year defined in 00_global_init.R
 # For safety, let's process the years sequentially, while grids within each year run in parallel.
 message("\n--- Starting processing for all target years ---")
-purrr::walk(target_years, function(yr) {
-  run_pipeline_year(year = yr, sample_grids = llr_grids, output_base = "outputs/forest_masks")
+year_status <- purrr::map_lgl(target_years, function(yr) {
+  run_pipeline_year(
+    year = yr,
+    sample_grids = llr_grids,
+    output_base = "outputs/forest_masks",
+    template_res = template_res,
+    template_crs = analysis_crs,
+    crop_margin = grid_crop_margin
+  )
 })
+
+future::plan(future::sequential)
+
+skipped_years <- target_years[!year_status]
+if (length(skipped_years) > 0) {
+  warning(paste("Years skipped for missing inputs:", paste(skipped_years, collapse = ", ")),
+          call. = FALSE, immediate. = TRUE)
+}
