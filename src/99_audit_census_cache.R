@@ -74,20 +74,52 @@ if (length(dupe_hashes) == 0) {
   quit(save = "no")
 }
 
-message("\n!!! Identical content found across different years !!!")
-suspect_paths <- character(0)
+# Identical content across years is only a problem when nothing explains it.
+# A stamped fallback legitimately produces duplicates: if 2009 and 2010 both
+# fell back to 2011, all three files share content and all three say so. That
+# is the system working, not corruption. Only flag a group when the stamps do
+# not account for it.
+explained <- list()
+suspect   <- list()
 for (h in dupe_hashes) {
   grp <- info[info$content_hash == h, ]
-  years <- grp$year
-  message("\n  Years with identical place geometries: ", paste(years, collapse = ", "))
-  # The genuine file is the one the data actually came from. Without a stamp we
-  # cannot know which, so report the whole group and suggest keeping none.
-  stamped <- grp$stamped_source_year[!is.na(grp$stamped_source_year)]
-  if (length(stamped) > 0) {
-    message("    Provenance stamp says the source year is: ", paste(unique(stamped), collapse = ", "))
+  stamps <- grp$stamped_source_year
+  if (anyNA(stamps)) {
+    grp$reason <- "one or more files carry no provenance stamp, so the true source year is unknown"
+    suspect[[h]] <- grp
+  } else if (length(unique(stamps)) > 1) {
+    grp$reason <- paste0("files share identical content but disagree on their source year (",
+                         paste(unique(stamps), collapse = ", "), ")")
+    suspect[[h]] <- grp
   } else {
-    message("    None of these files carry a provenance stamp, so the true source year is unknown.")
+    explained[[h]] <- grp
   }
+}
+
+if (length(explained) > 0) {
+  message("\n--- Duplicate content, explained by provenance (no action needed) ---")
+  for (grp in explained) {
+    message("  ", paste(grp$year, collapse = ", "),
+            "  all sourced from ", unique(grp$stamped_source_year),
+            ifelse(unique(grp$stamped_source_year) %in% grp$year,
+                   "  (that year downloaded normally; the others fell back to it)",
+                   ""))
+  }
+  message("  These years have no Census Places of their own. The substitution is")
+  message("  recorded in each file's census_source_year column.")
+}
+
+if (length(suspect) == 0) {
+  message("\nOK: no unexplained duplication. Every cached file is either unique or")
+  message("    a fallback that says so.")
+  quit(save = "no")
+}
+
+message("\n!!! Unexplained identical content across different years !!!")
+suspect_paths <- character(0)
+for (grp in suspect) {
+  message("\n  Years: ", paste(grp$year, collapse = ", "))
+  message("    ", grp$reason[1])
   suspect_paths <- c(suspect_paths, grp$path)
 }
 
@@ -96,5 +128,3 @@ message("Remove the affected files so the corrected pipeline re-downloads them a
 message("stamps each with its real source year:\n")
 message("  rm ", paste(suspect_paths, collapse = " \\\n     "))
 message("\nThen re-run:  Rscript 0_run.R")
-message("\nAny year that genuinely has no Census data will be re-fetched from the")
-message("nearest available year and clearly marked via the census_source_year column.")
