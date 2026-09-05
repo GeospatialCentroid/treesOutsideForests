@@ -224,9 +224,12 @@ nlcd_paths <- lapply(target_years, function(yr) {
 #'   requested year is unavailable. Defaults to the other target years, nearest
 #'   first.
 #' @param max_attempts Maximum number of years to try before giving up.
+#' @param state_select_buffer Distance (map units) to buffer the LLR by when
+#'   deciding which states overlap it, covering grids that overhang the edge.
 #' @return Path to the output GPKG file.
 get_census_places <- function(llr, year, output_dir = "data/raw/census",
-                              fallback_years = NULL, max_attempts = 4) {
+                              fallback_years = NULL, max_attempts = 4,
+                              state_select_buffer = get0("study_area_margin", ifnotfound = 5000)) {
   output_path <- file.path(output_dir, paste0("census_places_", year, ".gpkg"))
 
   if (file.exists(output_path)) {
@@ -247,12 +250,17 @@ get_census_places <- function(llr, year, output_dir = "data/raw/census",
   attempt_download <- function(yr) {
     message(paste("Downloading Census states and places for year", yr, "overlapping the LLR study area..."))
 
-    # Determine all states genuinely overlapping the LLR polygon. Cropping to
-    # the LLR bounding box instead pulls in states that only touch the box
-    # corners, downloading places that can never intersect a sample grid.
+    # Determine all states genuinely overlapping the LLR. Cropping to the LLR
+    # bounding box instead pulls in states that only touch the box corners,
+    # downloading places that can never intersect a sample grid.
+    #
+    # Buffer the LLR before the test: 1km grids are generated from 100km parents
+    # and can overhang the LLR edge, so a grid can reach slightly into a state
+    # that does not itself intersect the LLR polygon.
+    llr_reach <- sf::st_buffer(sf::st_union(llr), state_select_buffer)
     States <- tigris::states(year = yr, progress_bar = FALSE) |>
       sf::st_transform(crs = sf::st_crs(llr))
-    overlaps <- lengths(sf::st_intersects(States, llr)) > 0
+    overlaps <- lengths(sf::st_intersects(States, llr_reach)) > 0
     unique_states <- unique(States$STATEFP[overlaps])
 
     if (length(unique_states) == 0) {
