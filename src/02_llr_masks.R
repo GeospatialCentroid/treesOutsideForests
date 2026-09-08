@@ -1,26 +1,26 @@
 # ==============================================================================
 # LLR-Scale Mask Products
 # ==============================================================================
-# One forest mask and one urban mask per year for the whole of LRR F, rather
-# than per 1km sample grid.
+# The deliverable: one forest mask and one urban mask per year, covering the
+# whole LRR.
 #
 #   forest  <- NLCD classes 41/42/43, as 0 = not forest, 1 = forest
 #   urban   <- US Census places (NOT an NLCD class), to stay consistent with the
 #              other teams' carbon-storage metrics for forest and urban areas
 #
-# Both are masked to the LRR F polygon buffered by 1km, so that 30m NLCD pixels
+# Both are masked to the LRR polygon buffered by 1km, so that 30m NLCD pixels
 # and the irregular LRR boundary cannot interact to clip real data at the edge.
 #
 # Each product is written twice:
 #   - GeoTIFF on the native NLCD grid, for storage and for any pixel-level work
-#   - GeoPackage polygons, which is what bridges the 30m NLCD / 1m NAIP
-#     resolution gap: a polygon boundary can be intersected against any grid,
-#     whereas a 30m raster can only be resampled onto one.
+#   - GeoPackage polygons, which is what carries the mask across a resolution
+#     change: a polygon boundary can be intersected against any grid, whereas a
+#     30m raster can only be resampled onto one.
 #
-# Independent of 00-04. It reads the per-year binaries that 01_pipeline_worker.R
-# already cached, so nothing is re-downloaded and no existing step changes.
+# Reads the per-year rasters and Census layers that src/01_pipeline_worker.R
+# caches. Runs either as the third step of 0_run.R or on its own:
 #
-#     Rscript src/05_llr_masks.R
+#     Rscript src/02_llr_masks.R
 # ==============================================================================
 
 pacman::p_load(terra, sf, dplyr, purrr)
@@ -31,8 +31,10 @@ terra::terraOptions(progress = 0)
 
 # --- Configuration ------------------------------------------------------------
 
-llr_id           <- "F"
-llr_target_years <- 2009:2021
+# Defer to 00_global_init.R when this runs as part of 0_run.R; fall back to the
+# same defaults when it is run on its own.
+llr_id           <- get0("llr_id", ifnotfound = "F")
+llr_target_years <- get0("target_years", ifnotfound = 2009:2021)
 
 # Buffer applied to the LRR polygon before masking. 1km is comfortably more than
 # one 30m NLCD pixel, so no real data is lost where the boundary cuts a pixel.

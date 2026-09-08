@@ -1,124 +1,105 @@
-# Agroforestry Masks Pipeline
+# Agroforestry LLR Masks
 
-Parallelised R spatial workflow that builds 1 m forest masks for a sample of
-1 km grids within a USDA Land Resource Region (LRR), for each year of Annual
-NLCD.
+R workflow that builds annual **forest** and **urban** mask products covering a
+whole USDA Land Resource Region (LRR), from Annual NLCD and US Census places.
 
-For the current configuration (LRR "F", 2009–2021) that is 15,380 grids × 13
-years ≈ 200,000 output layers.
+For the current configuration (LRR `F`, 2009–2021) that is 13 years × 4 layers.
+
+Forest comes from NLCD; urban comes from Census places rather than the NLCD
+developed classes, so that these products line up with the other teams'
+carbon-storage metrics for forest and urban areas. The subject of the work is
+trees *outside* of forests, so the two masks are used together.
+
+## Products
+
+Everything lands in `outputs/llr_masks/`, one set per year:
+
+| file | contents |
+|---|---|
+| `llr_F_forest_<year>.tif` | `0` = not forest, `1` = forest, 30 m, INT1U, NoData 255 |
+| `llr_F_forest_<year>.gpkg` | the same mask as polygons, EPSG:5070 |
+| `llr_F_places_<year>.gpkg` | Census places clipped to the study area, attributes intact |
+| `llr_F_urban_<year>.gpkg` | those places dissolved into a single urban mask |
+
+Plus `llr_F_study_area.gpkg` (the exact clip boundary) and
+`llr_mask_summary.csv` (per-year forest percentage, place count, and Census
+provenance).
+
+The **rasters stay on the native NLCD grid** and the **polygons are written in
+EPSG:5070**. Reprojecting a categorical raster resamples it for no gain, whereas
+vector reprojection is exact — so the lossless archive stays where the source
+data is, and the working product lands in the project frame. Set
+`llr_raster_crs` in `src/02_llr_masks.R` to reproject the rasters too.
+
+The polygon version is what carries the mask across a resolution change: a
+polygon boundary can be intersected against any grid, whereas a 30 m raster can
+only be resampled onto one.
+
+## Study area
+
+All products are clipped to the LRR polygon **buffered by 1 km**
+(`llr_buffer_m`). The buffer is comfortably wider than one 30 m NLCD pixel, so
+no real data is lost where the irregular boundary cuts through a pixel.
+
+The buffer is applied to the *unioned* LRR polygon. Buffering the parts
+separately and unioning afterwards leaves hairline slivers along shared internal
+edges.
 
 ## Repository Structure
 
 ```text
 agroforestry_Masks/
-├── 0_run.R                          # Runs the three phases in order
+├── 0_run.R                        # Runs the three steps in order
 ├── data/
-│   ├── lower48LRR.gpkg              # LRR boundaries (input)
-│   ├── grid100km_aea.gpkg           # 100km parent grid (input)
-│   ├── selectedSample_lrr_F_05_2026.csv  # Sample 1km grid ids (input)
-│   ├── raw/NLCD/                    # Downloaded national NLCD GeoTIFFs
-│   ├── raw/census/                  # Census Places per year
-│   └── processed/
-│       ├── NLCD/                    # LRR-scale cropped + binary rasters
-│       └── llr_grids_sample.gpkg    # Cached 1km grid geometries
-├── outputs/
-│   ├── forest_masks/<year>/         # [id]_[year]_NLCD_Forest.gpkg
-│   │                                # [id]_[year]_Census.gpkg
-│   └── logs/                        # One file per failed grid
+│   ├── lower48LRR.gpkg            # LRR boundaries (input)
+│   ├── raw/NLCD/                  # Downloaded national NLCD GeoTIFFs
+│   ├── raw/census/                # Census places per year
+│   └── processed/NLCD/            # LRR-scale cropped + binary rasters
+├── outputs/llr_masks/             # The products
 └── src/
-    ├── 00_global_init.R             # Config, packages, input data
-    ├── 01_pipeline_worker.R         # LRR-scale NLCD + Census preparation
-    ├── 02_run_pipeline.R            # Grid-scale parallel processing
-    ├── generateAOI.R                # Hierarchical grid generation helpers
-    └── 99_audit_census_cache.R      # Read-only check for census cache issues
+    ├── 00_global_init.R           # Config, packages, LRR boundary
+    ├── 01_pipeline_worker.R       # Download + prepare NLCD and Census
+    ├── 02_llr_masks.R             # Build the LLR-scale products
+    └── 99_audit_census_cache.R    # Check the Census cache for silent fallbacks
 ```
 
-## Running the Pipeline
+## Running
 
 ```r
 source("0_run.R")
 ```
 
-This runs three phases in order:
-
-1. **`00_global_init.R`** — loads packages, sets configuration, reads the LRR
-   boundary, the 100 km parent grid, and the sample id table.
-2. **`01_pipeline_worker.R`** — for each target year: downloads the national
-   Annual NLCD bundle from MRLC, crops and masks it to the study area, and
-   reclassifies it to a binary forest mask. Then downloads Census Places for
-   the states overlapping the LRR.
-3. **`02_run_pipeline.R`** — generates the 1 km grid geometries (cached), then
-   for each year clips, reprojects to 1 m, and vectorises the forest mask and
-   the Census Places for every grid in parallel.
-
-Phases are re-runnable: each step skips work whose output already exists on
-disk. Delete the relevant file to force a step to redo itself.
-
-## Configuration
-
-All knobs live at the top of `src/00_global_init.R`:
-
-| Setting | Meaning |
-| --- | --- |
-| `target_years` | Years to process (default `2009:2021`). |
-| `nlcdClasses` | NLCD classes counted as forest (default `41, 42, 43`). |
-| `llr_id` | Which LRR to process (default `"F"`). |
-| `analysis_crs` | CRS for all grids and outputs (default `EPSG:5070`). |
-| `template_res` | Output resolution in metres (default `1`). |
-| `study_area_margin` | Margin around the LRR bbox when clipping NLCD (default `5000`). |
-| `grid_crop_margin` | Margin on each per-grid NLCD crop (default `30`). |
-| `grid_limit` | `NULL` for a full run, or an integer for a smoke test. |
-
-### Running a smoke test
-
-Set `grid_limit <- 25` in `src/00_global_init.R`. The run warns on every
-execution while it is set, so a partial run cannot be mistaken for a full one.
-Set it back to `NULL` for production.
-
-## Parallel Logging Strategy
-
-The grid pipeline runs 8 `future` multisession workers. `message()` output from
-a worker is discarded, so failures are recorded on disk instead:
-
-- The worker wraps its work in `tryCatch`.
-- On error it writes `outputs/logs/fail_[id]_[year].txt` containing the grid id,
-  year, timestamp, and error message.
-- One file per failure means no shared handle, so no lock and no race.
-- The failure count is just the number of files in `outputs/logs/`.
-
-`run_pipeline_year()` also reports the success count and the first few failed
-grid ids at the end of each year.
-
-## Data Provenance Caveats
-
-**Census Places are not available for every year.** When a year cannot be
-downloaded, the pipeline falls back to the nearest available year. The
-substituted data is written under the requested year's filename (the grid
-pipeline looks it up by year), so provenance is recorded *inside* the data:
-
-- `census_source_year` — the year the geometries actually came from.
-- `census_requested_year` — the year that was asked for.
-
-A fallback also raises a warning at download time and is listed in the
-provenance table printed at the end of phase 2. **Check `census_source_year`
-before treating a Census output as belonging to its filename's year.**
-
-Files written before provenance stamping was added carry no such column. Run:
+or the final step alone, once the inputs are cached:
 
 ```sh
-Rscript src/99_audit_census_cache.R
+Rscript src/02_llr_masks.R
 ```
 
-to fingerprint the cached files and report any years sharing identical content
-— a sign that one of them is a silent substitution. The script is read-only; it
-prints the removal command but deletes nothing.
+Step 2 downloads ~1.3 GB per NLCD year on first run and is skipped thereafter.
+Step 3 takes roughly two minutes per year, most of it polygonising a
+1.1-billion-cell raster.
 
-## Notes on Geometry
+## Caveat: three years of Census places are substituted
 
-- Grid ids are hierarchical: `100km-50km-10km-2km-1km`, each level a hex index
-  within its parent (e.g. `1548-1-19-a-4`).
-- The NLCD rasters are Albers on WGS84; the analysis CRS is Albers on NAD83
-  (EPSG:5070). Grids are transformed into the raster's CRS before cropping, and
-  the crop carries a one-cell margin to absorb the datum shift.
-- Per-grid crops use `snap = "out"`. The default (`"near"`) rounds the crop
-  extent inward and leaves a NA strip along the grid edges.
+Not every year is served by the Census API. When a year is unavailable the
+pipeline falls back to the nearest available year and records what it actually
+used in a `census_source_year` column, carried into every places and urban
+layer and reported in `llr_mask_summary.csv`.
+
+For the current cache:
+
+```text
+2009 <- 2011     2010 <- 2011     2013 <- 2012
+```
+
+The urban masks for those three years do not reflect that year's place
+boundaries. The other ten are genuine. **Pass this on with the data**, since the
+filenames say 2009/2010/2013.
+
+Run `src/99_audit_census_cache.R` to re-check the cache for silent fallbacks.
+
+## Note on the place-count step change
+
+Place counts sit at 717–720 for 2009–2019 and jump to 817 for 2020–2021. That is
+the decennial boundary revision, not growth. Anything longitudinal across that
+break should account for it as a definitional change.

@@ -28,7 +28,4 @@ outputs/
 # Allow tracking .gitkeep files so directory structures remain intact
 !.gitkeep
 
-# NAIP grid reference (~36MB for the full sample) and its resumable cache
-data/naip_reference.json
-data/naip_reference*_cache.jsonl
 run_logs/
