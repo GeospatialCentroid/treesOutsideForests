@@ -1,0 +1,26 @@
+# R / RStudio
+.Rhistory
+.Rapp.history
+.RData
+.RDataTmp
+.Ruserdata
+.Rproj.user/
+Rplots.pdf
+
+# Pipelines and caches
+_targets/
+renv/library/
+renv/staging/
+
+# Large geospatial data and archives
+*.tif
+*.tiff
+*.gpkg
+*.zip
+*.tar.gz
+*.7z
+
+# OS
+.DS_Store
+desktop.ini
+Thumbs.db
