@@ -1,0 +1,71 @@
+# --- R Specific ---
+# History files
+.Rhistory
+.RData
+.Ruserdata
+
+# Filter documentation
+*-Ex.R
+
+# Session-specific metadata
+.Rproj.user/
+
+# --- Data and Large Files ---
+# Ignore everything under data/ except for required input files and folders
+data/**
+
+output/
+temp/
+documentation/fileTransfer.Rmd
+documentation/fileTransfer.html
+
+# Specifically ignore common data formats if they end up in root
+*.csv
+*.rds
+*.RData
+*.xlsx
+*.parquet
+*.sqlite
+*.zip
+*.tar.gz
+
+# --- Geospatial Specific ---
+# Large spatial files and sidecars
+*.shp
+*.shx
+*.dbf
+*.prj
+*.sbn
+*.sbx
+*.cpg
+*.tif
+*.tiff
+*.gpkg
+*.geojson
+
+# --- Environment & Security ---
+# Critical: Never commit your secrets
+.env
+.Renviron
+.Rprofile
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
+
+# Ignore local network mounts
+mnt/
+# local config settings 
+config.yml
+
+# --- Required Input Files (Override All Ignores) ---
+!config.yml
+!data/
+!data/grid100km_aea.gpkg
+!data/mlra/
+!data/mlra/lower48MLRA.gpkg
+!data/LRR_sampleGrids/
+!data/LRR_sampleGrids/selectedSample_lrr_F_05_2026.csv
+!data/LRR_sampleGrids/selectedSample_lrr_G_draw_1400_05_2026.csv
+!data/LRR_sampleGrids/groundTruth_ids_lrr_F_06_2026.csv
+
