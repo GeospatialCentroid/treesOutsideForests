@@ -8,6 +8,12 @@
 #   urban   <- US Census places (NOT an NLCD class), to stay consistent with the
 #              other teams' carbon-storage metrics for forest and urban areas
 #
+# A mask is only built for a year that has its own independent source layer. The
+# Census does not serve every year; those years get forest products and no urban
+# products, rather than an urban mask carrying a neighbouring year's boundaries
+# under this year's filename. Forest is unaffected - Annual NLCD covers every
+# year in the range.
+#
 # Both are masked to the LRR polygon buffered by 1km, so that 30m NLCD pixels
 # and the irregular LRR boundary cannot interact to clip real data at the edge.
 #
@@ -25,6 +31,11 @@
 
 pacman::p_load(terra, sf, dplyr, purrr)
 
+# How this script decides whether a cached Census file is genuinely its year.
+# Sourced again here so that the script still runs on its own.
+source(here::here("shared/R/setup.R"))
+source(tof_root("masks/src/00_census_provenance.R"))
+
 # Progress bars are written for every block of a 1.1-billion-cell raster and
 # swamp the run log without saying anything useful.
 terra::terraOptions(progress = 0)
@@ -32,28 +43,93 @@ terra::terraOptions(progress = 0)
 # --- Configuration ------------------------------------------------------------
 
 # Defer to 00_global_init.R when this runs as part of 0_run.R; fall back to the
-# same defaults when it is run on its own.
-llr_id           <- get0("llr_id", ifnotfound = "F")
-llr_target_years <- get0("target_years", ifnotfound = 2009:2021)
+# same values from config.yml when it is run on its own.
+cfg_masks        <- tof_config()$masks
+llr_id           <- get0("llr_id", ifnotfound = cfg_masks$llr_id)
+llr_target_years <- get0("target_years", ifnotfound = seq(cfg_masks$years$start, cfg_masks$years$end))
+
+# FALSE means a year without its own Census Places release gets no urban
+# products at all. See allow_census_year_substitution in 00_global_init.R.
+llr_allow_substitution <- get0("allow_census_year_substitution", ifnotfound = cfg_masks$allow_census_year_substitution)
 
 # Buffer applied to the LRR polygon before masking. 1km is comfortably more than
 # one 30m NLCD pixel, so no real data is lost where the boundary cuts a pixel.
 llr_buffer_m <- 1000
 
-llr_out_dir  <- "outputs/llr_masks"
-nlcd_dir     <- "data/processed/NLCD"
-census_dir   <- "data/raw/census"
+llr_out_dir  <- tof_path(cfg_masks$paths$outputs)
+nlcd_dir     <- tof_path(cfg_masks$paths$nlcd_processed)
+census_dir   <- tof_path(cfg_masks$paths$census_raw)
 
 # Rasters stay on the native NLCD grid: reprojecting a categorical layer
 # resamples it for no gain, and the polygons are the product intended for
 # cross-resolution work. Vector reprojection is exact, so the polygons are
 # written in the project frame. Set llr_raster_crs to reproject the rasters too.
-llr_polygon_crs <- "EPSG:5070"
+llr_polygon_crs <- tof_config()$crs
 llr_raster_crs  <- NULL
+
+# Annual NLCD is published with the CRS string "AEA        WGS84" - the same
+# Albers parameters as EPSG:5070 but a WGS84 datum label and no EPSG code, so
+# software reads the rasters and the polygons as two different CRSs even though
+# the coordinates are identical. Relabelling (not reprojecting) puts both halves
+# of the delivery in one declared frame. Only ever applied when the projection
+# parameters already match; see relabel_raster_crs(). Set to NULL to keep the
+# source label.
+llr_raster_crs_label <- "EPSG:5070"
+
+# Rebuild the GeoPackage products while leaving the rasters alone - what a
+# change to the vector schema needs, since polygonising is the expensive step
+# and the rasters are unaffected by it.
+llr_overwrite_vectors <- get0("llr_overwrite_vectors", ifnotfound = FALSE)
+
+# NLCD classes the forest mask is built from, recorded in the outputs so a file
+# that travels on its own still says what it contains.
+llr_forest_classes <- get0("nlcdClasses", ifnotfound = c(41, 42, 43))
 
 # TRUE splits the dissolved mask into one feature per forest patch. The default
 # writes a single multipolygon, which is what a mask normally wants.
 llr_disaggregate <- FALSE
+
+#' Relabel a Raster CRS, but Only When the Projection Really Does Match
+#'
+#' Assigning a CRS is not reprojecting: it changes what the file claims to be
+#' without moving a single coordinate. That is the right operation for Annual
+#' NLCD, whose grid is Albers on exactly EPSG:5070's parameters but carries a
+#' WGS84 datum label and no EPSG code - the NAD83/WGS84 difference measures 0 m
+#' here. It is the wrong operation for anything else, so the projection
+#' parameters are compared first and a mismatch leaves the raster untouched.
+#'
+#' @param r SpatRaster.
+#' @param target CRS to assign, or NULL to leave the raster alone.
+#' @return The raster, relabelled or not.
+relabel_raster_crs <- function(r, target = llr_raster_crs_label) {
+  if (is.null(target)) return(r)
+
+  # Compare the projection parameters, ignoring the datum and ellipsoid, which
+  # are exactly what is being corrected.
+  params <- function(crs_text) {
+    p4 <- try(terra::crs(crs_text, proj = TRUE), silent = TRUE)
+    if (inherits(p4, "try-error") || is.na(p4) || !nzchar(p4)) return(NULL)
+    keep <- c("proj", "lat_0", "lon_0", "lat_1", "lat_2", "x_0", "y_0", "units")
+    kv <- strsplit(sub("^\\+", "", trimws(p4)), "\\s+\\+")[[1]]
+    kv <- strsplit(kv, "=")
+    out <- stats::setNames(
+      vapply(kv, function(x) if (length(x) > 1) x[2] else "", character(1)),
+      vapply(kv, `[`, character(1), 1))
+    out[intersect(keep, names(out))]
+  }
+
+  from <- params(terra::crs(r))
+  to   <- params(target)
+  if (is.null(from) || is.null(to) || !identical(from, to)) {
+    warning(paste0("Raster CRS does not match ", target,
+                   " on projection parameters; leaving its own CRS in place."),
+            call. = FALSE, immediate. = TRUE)
+    return(r)
+  }
+
+  terra::crs(r) <- target
+  r
+}
 
 #' Buffered LRR Study Polygon
 #'
@@ -62,8 +138,8 @@ llr_disaggregate <- FALSE
 #' @param buffer_m Buffer distance in metres.
 #' @param crs CRS to build the polygon in.
 #' @return sf single-feature polygon.
-llr_study_polygon <- function(llr_path = "data/lower48LRR.gpkg", id = llr_id,
-                              buffer_m = llr_buffer_m, crs = "EPSG:5070") {
+llr_study_polygon <- function(llr_path = tof_path(tof_config()$reference$lrr_gpkg), id = llr_id,
+                              buffer_m = llr_buffer_m, crs = llr_polygon_crs) {
   llr <- sf::st_read(llr_path, quiet = TRUE) |>
     dplyr::filter(LRRSYM == id) |>
     sf::st_transform(crs)
@@ -113,8 +189,21 @@ build_llr_forest_raster <- function(year, study, out_dir = llr_out_dir,
   m   <- terra::mask(tmp, study_r)
 
   if (!is.null(llr_raster_crs)) m <- terra::project(m, llr_raster_crs, method = "near")
+  m <- relabel_raster_crs(m)
 
   names(m) <- "forest"
+  # Stamp the provenance into the file's own metadata. A GeoTIFF cannot carry an
+  # attribute table, so this is the only place a raster that has been separated
+  # from the summary CSV can say what it is.
+  terra::metags(m) <- c(
+    mask_type    = "forest",
+    year         = as.character(year),
+    lrr          = llr_id,
+    source       = sprintf("Annual NLCD Land Cover %d", year),
+    nlcd_classes = paste(llr_forest_classes, collapse = ","),
+    values       = "0 = not forest, 1 = forest, 255 = outside study area",
+    study_area   = sprintf("LRR %s buffered by %dm", llr_id, llr_buffer_m)
+  )
   terra::writeRaster(
     m, dest, overwrite = TRUE,
     datatype = "INT1U", NAflag = 255,
@@ -157,7 +246,12 @@ build_llr_forest_polygons <- function(tif_path, year, out_dir = llr_out_dir,
 
   s <- sf::st_as_sf(p)
   names(s)[names(s) != attr(s, "sf_column")] <- "forest"
-  s$year <- as.integer(year)
+  # Same provenance the raster carries in its metadata, as attributes: a layer
+  # that reaches someone without the summary CSV still says what it is.
+  s$year         <- as.integer(year)
+  s$lrr          <- llr_id
+  s$source       <- sprintf("Annual NLCD Land Cover %d", year)
+  s$nlcd_classes <- paste(llr_forest_classes, collapse = ",")
   if (!is.null(crs)) s <- sf::st_transform(s, crs)
 
   sf::st_write(s, dest, delete_dsn = TRUE, quiet = TRUE)
@@ -171,24 +265,60 @@ build_llr_forest_polygons <- function(tif_path, year, out_dir = llr_out_dir,
 #' up with the other teams' carbon-storage metrics.
 #'
 #' Writes the attributed places layer and a dissolved single-geometry urban mask
-#' that parallels the forest polygons.
+#' that parallels the forest polygons - but only for a year whose cached Census
+#' file is genuinely that year's release. A year the Census does not serve gets
+#' nothing, and anything an earlier substituting run left on disk for that year
+#' is removed, so the output directory cannot keep asserting a mask the policy
+#' no longer allows.
 #'
 #' @param year Integer year.
 #' @param study sf buffered LRR polygon.
 #' @param out_dir Output directory.
+#' @param crs CRS to write the polygons in.
 #' @param overwrite Rebuild even if the outputs exist.
-#' @return Named list of written paths, or NULL if the input is missing.
+#' @param allow_substitution Accept a Census file stamped with another year.
+#' @return Named list of written paths, or NULL when the year has no usable
+#'   Census source.
 build_llr_urban <- function(year, study, out_dir = llr_out_dir,
-                            crs = llr_polygon_crs, overwrite = FALSE) {
+                            crs = llr_polygon_crs, overwrite = FALSE,
+                            allow_substitution = llr_allow_substitution) {
   src <- file.path(census_dir, sprintf("census_places_%d.gpkg", year))
-  if (!file.exists(src)) {
+  places_dest <- file.path(out_dir, sprintf("llr_%s_places_%d.gpkg", llr_id, year))
+  urban_dest  <- file.path(out_dir, sprintf("llr_%s_urban_%d.gpkg", llr_id, year))
+
+  # The source gate. A year only gets urban products when it has an independent
+  # Census release of its own; the check runs before the exists-and-skip branch
+  # so that outputs from a previous, substituting run are cleared rather than
+  # reported as up to date.
+  if (!allow_substitution) {
+    cached_source <- census_source_year_of(src)
+    if (!identical(cached_source, as.integer(year))) {
+      stale <- c(places_dest, urban_dest)[file.exists(c(places_dest, urban_dest))]
+      if (length(stale) > 0) file.remove(stale)
+      message(sprintf(
+        "  %d has no Census Places release of its own (%s) - no urban products.%s",
+        year,
+        if (!file.exists(src)) "nothing cached"
+        else if (is.na(cached_source)) "cached file is unstamped"
+        else paste("cached file holds", cached_source, "boundaries"),
+        if (length(stale) > 0) paste0("\n    Removed stale output(s): ",
+                                      paste(basename(stale), collapse = ", ")) else ""
+      ))
+      return(NULL)
+    }
+  } else if (!file.exists(src)) {
     warning(paste("Missing Census places for", year, "at", src, "- skipping."),
             call. = FALSE, immediate. = TRUE)
     return(NULL)
   }
-  places_dest <- file.path(out_dir, sprintf("llr_%s_places_%d.gpkg", llr_id, year))
-  urban_dest  <- file.path(out_dir, sprintf("llr_%s_urban_%d.gpkg", llr_id, year))
-  if (file.exists(places_dest) && file.exists(urban_dest) && !overwrite) {
+
+  # An existing output is only up to date if it was built from this year's own
+  # data. Outputs written before the policy change carry a source year of their
+  # own, and a stale one has to be rebuilt rather than skipped over.
+  outputs_current <- file.exists(places_dest) && file.exists(urban_dest) &&
+    (allow_substitution || census_is_independent(places_dest, year))
+
+  if (outputs_current && !overwrite) {
     message(sprintf("  %d urban outputs exist - skipping.", year))
     # Read the summary fields back off the existing layer rather than returning a
     # short list. A skip has to return the same shape as a build, or the caller's
@@ -201,13 +331,24 @@ build_llr_urban <- function(year, study, out_dir = llr_out_dir,
       census_source_year = if ("census_source_year" %in% names(existing) &&
                                nrow(existing) > 0) {
         existing$census_source_year[1]
-      } else NA_integer_
+      } else NA_integer_,
+      census_boundary_type = census_boundary_type_of(existing)
     ))
+  }
+  if (file.exists(places_dest) && !outputs_current) {
+    message(sprintf("  %d urban outputs were built from other data - rebuilding.", year))
   }
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 
   places <- sf::st_read(src, quiet = TRUE)
   study_p <- sf::st_transform(study, sf::st_crs(places))
+
+  # Carried through the intersection so each surviving place can be compared
+  # against its own uncut geometry. Measuring against ALAND instead would mix
+  # the clip with cartographic generalisation - a generalised place differs from
+  # its published area by a percent or two, which is the same order as a light
+  # clip and would flag dozens of untouched places in the cb years.
+  places$.uncut_area <- as.numeric(sf::st_area(places))
 
   clipped <- suppressWarnings(
     sf::st_intersection(places, sf::st_geometry(study_p))
@@ -218,11 +359,23 @@ build_llr_urban <- function(year, study, out_dir = llr_out_dir,
   if (nrow(clipped) > 0) {
     clipped <- sf::st_cast(clipped, "MULTIPOLYGON", warn = FALSE)
   }
+
+  # Computed before the reprojection, while both areas are in the same frame.
+  # ALAND and AWATER still describe the whole place as the Census published it,
+  # so this is the only field that says how much of it is actually here.
+  if (nrow(clipped) > 0) {
+    retained <- as.numeric(sf::st_area(clipped)) / clipped$.uncut_area
+    clipped$area_retained <- ifelse(is.finite(retained), round(pmin(retained, 1), 4), NA_real_)
+  }
+  clipped$.uncut_area <- NULL
+
   clipped <- sf::st_transform(clipped, crs)
 
-  # Carry the provenance stamp forward. Three cached years are substitutions
-  # (2009<-2011, 2010<-2011, 2013<-2012); without this the output would claim
-  # to be that year's boundaries.
+  # Carry the provenance stamp forward. With substitution disabled this always
+  # equals `year` - the gate above guarantees it - but the column stays in the
+  # output so a consumer can verify provenance from the data itself rather than
+  # from the filename, and so the layer is still self-describing if someone
+  # re-enables substitution.
   src_year <- if ("census_source_year" %in% names(clipped) && nrow(clipped) > 0) {
     clipped$census_source_year[1]
   } else NA_integer_
@@ -232,39 +385,53 @@ build_llr_urban <- function(year, study, out_dir = llr_out_dir,
       year, src_year, year, year), call. = FALSE, immediate. = TRUE)
   }
 
+  # Which of the year's two published products this came from. Layers cached
+  # before the download step stamped it are identified from their schema, so
+  # every delivered layer carries the field regardless of when it was fetched.
+  boundary_type <- census_boundary_type_of(clipped)
+  clipped$census_boundary_type <- boundary_type
+
   sf::st_write(clipped, places_dest, delete_dsn = TRUE, quiet = TRUE)
 
   urban <- if (nrow(clipped) > 0) {
     sf::st_sf(
-      urban = 1L, year = as.integer(year),
+      urban = 1L, year = as.integer(year), lrr = llr_id,
+      n_places = nrow(clipped),
       census_source_year = src_year,
+      census_boundary_type = boundary_type,
       geometry = sf::st_union(clipped)
     )
   } else {
-    sf::st_sf(urban = integer(0), year = integer(0),
-              census_source_year = integer(0),
+    sf::st_sf(urban = integer(0), year = integer(0), lrr = character(0),
+              n_places = integer(0), census_source_year = integer(0),
+              census_boundary_type = character(0),
               geometry = sf::st_sfc(crs = sf::st_crs(clipped)))
   }
   sf::st_write(urban, urban_dest, delete_dsn = TRUE, quiet = TRUE)
 
   list(places = places_dest, urban = urban_dest, n_places = nrow(clipped),
-       census_source_year = src_year)
+       census_source_year = src_year, census_boundary_type = boundary_type)
 }
 
 #' Build Every LLR-Scale Product for One Year
 #'
 #' @param year Integer year.
 #' @param study sf buffered LRR polygon.
-#' @param overwrite Rebuild existing outputs.
+#' @param overwrite Rebuild existing outputs, rasters included.
+#' @param overwrite_vectors Rebuild only the GeoPackage products, which is what
+#'   a change to the vector schema needs - the rasters are unaffected and
+#'   re-cropping them is the expensive half of a run.
 #' @return One-row data.frame summarising what was written.
-build_llr_year <- function(year, study, overwrite = FALSE) {
+build_llr_year <- function(year, study, overwrite = FALSE,
+                           overwrite_vectors = llr_overwrite_vectors) {
   message(sprintf("\n--- LRR %s, %d ---", llr_id, year))
 
+  vectors <- overwrite || overwrite_vectors
   tif <- build_llr_forest_raster(year, study, overwrite = overwrite)
   gpkg <- if (!is.null(tif)) {
-    build_llr_forest_polygons(tif, year, overwrite = overwrite)
+    build_llr_forest_polygons(tif, year, overwrite = vectors)
   } else NULL
-  urb <- build_llr_urban(year, study, overwrite = overwrite)
+  urb <- build_llr_urban(year, study, overwrite = vectors)
 
   forest_pct <- if (!is.null(tif)) {
     r <- terra::rast(tif)
@@ -275,13 +442,30 @@ build_llr_year <- function(year, study, overwrite = FALSE) {
   # column into an error rather than an NA, so coerce first.
   one <- function(x, default) if (is.null(x) || length(x) == 0) default else x[[1]]
 
+  # A year with no Census release of its own is reported as such rather than as
+  # a blank row: "no independent Census release" and "the step failed" are
+  # different facts and the summary is what gets passed on with the data.
+  census_status <- if (!is.null(urb)) {
+    if (identical(as.integer(one(urb$census_source_year, NA_integer_)), as.integer(year))) {
+      "ok"
+    } else {
+      sprintf("substituted from %s", one(urb$census_source_year, NA_integer_))
+    }
+  } else {
+    "no independent Census release - no urban product"
+  }
+
   data.frame(
     year               = year,
     forest_raster      = one(if (is.null(tif)) NULL else basename(tif), NA_character_),
     forest_polygons    = one(if (is.null(gpkg)) NULL else basename(gpkg), NA_character_),
     forest_pct         = one(forest_pct, NA_real_),
+    places_polygons    = one(if (is.null(urb)) NULL else basename(urb$places), NA_character_),
+    urban_polygons     = one(if (is.null(urb)) NULL else basename(urb$urban), NA_character_),
     n_places           = one(urb$n_places, NA_integer_),
     census_source_year = one(urb$census_source_year, NA_integer_),
+    census_boundary_type = one(urb$census_boundary_type, NA_character_),
+    census_status      = census_status,
     stringsAsFactors   = FALSE
   )
 }
@@ -289,7 +473,12 @@ build_llr_year <- function(year, study, overwrite = FALSE) {
 # ==============================================================================
 # Entry point
 # ==============================================================================
-if (sys.nframe() == 0) {
+# Runs both as `Rscript src/02_llr_masks.R` and as the third step of 0_run.R.
+# sys.nframe() == 0 is only true of the first: source() adds a frame, so under
+# 0_run.R this file defined its functions and built nothing. Testing the
+# evaluation environment instead is true for both, and false only when the file
+# is sourced with local = TRUE to borrow its functions.
+if (identical(environment(), globalenv())) {
   message("=========================================================")
   message(sprintf("LLR-scale masks: LRR %s, %d-%d, %dm boundary buffer",
                   llr_id, min(llr_target_years), max(llr_target_years), llr_buffer_m))
@@ -312,6 +501,18 @@ if (sys.nframe() == 0) {
   print(summary_df, row.names = FALSE)
   utils::write.csv(summary_df, file.path(llr_out_dir, "llr_mask_summary.csv"),
                    row.names = FALSE)
+
+  # Years the Census does not serve are a property of the deliverable, not an
+  # error: say so once, plainly, at the end of the run.
+  no_urban <- summary_df$year[is.na(summary_df$urban_polygons)]
+  if (length(no_urban) > 0) {
+    message("\n--- Years with forest products only ---")
+    message("  ", paste(no_urban, collapse = ", "),
+            " have no independent Census Places release, so no places or urban")
+    message("  layer was built for them. The forest products for those years are")
+    message("  unaffected. Set allow_census_year_substitution <- TRUE to build them")
+    message("  from a neighbouring year instead.")
+  }
 
   subs <- summary_df[!is.na(summary_df$census_source_year) &
                        summary_df$census_source_year != summary_df$year, ]

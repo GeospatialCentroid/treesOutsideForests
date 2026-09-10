@@ -2,7 +2,7 @@
 #'
 #' @param local_working_dir Character. Path to the local processing/export directory.
 #' @return A data frame containing all completed/partial/failed status records.
-compileStatus <- function(local_working_dir = "data/exportData") {
+compileStatus <- function(local_working_dir = tof_path(tof_config()$naip$paths$export_dir)) {
   status_files <- list.files(
     path = local_working_dir,
     pattern = "^status\\.json$",
@@ -73,7 +73,7 @@ compileStatus <- function(local_working_dir = "data/exportData") {
 #' Clear all JSON status trackers on disk
 #'
 #' @param local_working_dir Character. Path to the local processing/export directory.
-clearStatus <- function(local_working_dir = "data/exportData") {
+clearStatus <- function(local_working_dir = tof_path(tof_config()$naip$paths$export_dir)) {
   status_files <- list.files(
     path = local_working_dir,
     pattern = "^status\\.json$",

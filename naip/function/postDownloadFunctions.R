@@ -138,7 +138,7 @@ mergeAndExportLidar <- function(files, out_path, aoi) {
 copyToExport <- function(id, year) {
   # Define the source directories to check
   source_dirs <- file.path(
-    "data",
+    tof_root("data/naip"),
     c("aoiExports", "lidarExports", "naipExports", "snicExports")
   )
 
@@ -150,7 +150,7 @@ copyToExport <- function(id, year) {
   )
 
   # 3. Create the destination directory inside exportData
-  dest_dir <- paste0("data/exportData/aoi_", id, "_", year)
+  dest_dir <- file.path(tof_path(tof_config()$naip$paths$export_dir), paste0("aoi_", id, "_", year))
 
   if (!dir.exists(dest_dir)) {
     dir.create(dest_dir, recursive = TRUE)

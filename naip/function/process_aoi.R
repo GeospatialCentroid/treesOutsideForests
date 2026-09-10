@@ -6,7 +6,7 @@ process_aoi <- function(
     aoi_id,
     target_year,
     g100_grid,
-    export_dir = "data/exportData",
+    export_dir = tof_path(tof_config()$naip$paths$export_dir),
     buffer_m = 250,
     run_snic = FALSE,
     export_1km_tight = FALSE,

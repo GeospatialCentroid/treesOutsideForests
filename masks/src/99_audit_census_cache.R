@@ -11,15 +11,22 @@
 # group of years whose contents are identical - a group larger than one means at
 # least one of those years is not really that year's data.
 #
+# The project no longer substitutes one year for another
+# (allow_census_year_substitution = FALSE), so a stamped fallback left over from
+# an older run is reported here too: it is not corruption, but it is not usable
+# as that year's source either, and the pipeline will quarantine it on the next
+# run.
+#
 # It is read-only. It prints the shell command to remove the suspect files so
 # that the corrected pipeline re-downloads them; it does not delete anything.
 #
-# Usage:  Rscript src/99_audit_census_cache.R [census_dir]
+# Usage:  Rscript masks/src/99_audit_census_cache.R [census_dir]
 
 suppressPackageStartupMessages(library(sf))
+suppressPackageStartupMessages(source(here::here("shared/R/setup.R")))
 
 args <- commandArgs(trailingOnly = TRUE)
-census_dir <- if (length(args) > 0) args[1] else "data/raw/census"
+census_dir <- if (length(args) > 0) args[1] else tof_path(tof_config()$masks$paths$census_raw)
 
 files <- list.files(census_dir, pattern = "^census_places_\\d{4}\\.gpkg$", full.names = TRUE)
 if (length(files) == 0) {
@@ -74,11 +81,12 @@ if (length(dupe_hashes) == 0) {
   quit(save = "no")
 }
 
-# Identical content across years is only a problem when nothing explains it.
-# A stamped fallback legitimately produces duplicates: if 2009 and 2010 both
-# fell back to 2011, all three files share content and all three say so. That
-# is the system working, not corruption. Only flag a group when the stamps do
-# not account for it.
+# Two different problems live in this duplication, and they need different
+# reports. A stamped fallback explains itself - if 2009 and 2010 both fell back
+# to 2011, all three files share content and all three say so - but under the
+# current policy those years have no source of their own and the files should
+# go, so they are listed as substitutions to remove. Unexplained duplication is
+# the more serious case: content matches but the stamps cannot account for it.
 explained <- list()
 suspect   <- list()
 for (h in dupe_hashes) {
@@ -96,22 +104,30 @@ for (h in dupe_hashes) {
   }
 }
 
+substituted_paths <- character(0)
 if (length(explained) > 0) {
-  message("\n--- Duplicate content, explained by provenance (no action needed) ---")
+  message("\n--- Substituted years (stamped, but not their own data) ---")
   for (grp in explained) {
+    src <- unique(grp$stamped_source_year)
+    subs <- grp[grp$year != src, ]
     message("  ", paste(grp$year, collapse = ", "),
-            "  all sourced from ", unique(grp$stamped_source_year),
-            ifelse(unique(grp$stamped_source_year) %in% grp$year,
-                   "  (that year downloaded normally; the others fell back to it)",
-                   ""))
+            "  all sourced from ", src,
+            if (src %in% grp$year) "  (that year downloaded normally; the others fell back to it)" else "")
+    substituted_paths <- c(substituted_paths, subs$path)
   }
-  message("  These years have no Census Places of their own. The substitution is")
-  message("  recorded in each file's census_source_year column.")
+  message("  These years have no Census Places of their own. Substitution is")
+  message("  disabled, so they get no urban products; the next pipeline run moves")
+  message("  each substituted file aside to a .quarantine name. Remove them now to")
+  message("  do it yourself:\n")
+  message("  rm ", paste(substituted_paths, collapse = " \\\n     "))
 }
 
 if (length(suspect) == 0) {
-  message("\nOK: no unexplained duplication. Every cached file is either unique or")
-  message("    a fallback that says so.")
+  if (length(substituted_paths) == 0) {
+    message("\nOK: no duplication. Every cached file is genuinely its own year.")
+  } else {
+    message("\nOK: no unexplained duplication - every duplicate is a stamped fallback.")
+  }
   quit(save = "no")
 }
 

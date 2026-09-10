@@ -6,19 +6,36 @@
 .Ruserdata
 .Rproj.user/
 Rplots.pdf
+.Renviron
+.env
 
 # Pipelines and caches
 _targets/
 renv/library/
 renv/staging/
+temp/
+output/
+run_logs/
 
-# Large geospatial data and archives
+# Data: everything under data/ is ignored except the small tracked reference inputs
+data/*
+!data/reference/
+!data/reference/**
+
+# Large geospatial data and archives anywhere else
 *.tif
 *.tiff
 *.gpkg
+*.shp
+*.shx
+*.dbf
+*.prj
+*.sqlite
+*.parquet
 *.zip
 *.tar.gz
 *.7z
+!data/reference/**/*.gpkg
 
 # OS
 .DS_Store

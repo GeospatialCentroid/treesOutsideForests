@@ -6,35 +6,35 @@
 # It runs entirely locally on the current machine and reads settings from config.yml.
 # ==============================================================================
 
+# 0. Shared helpers: repo-root paths and the root config.yml
+source(here::here("shared/R/setup.R"))
+
 # 1. Load Essential Orchestration Packages
 pacman::p_load(
   yaml, dplyr, sf, terra, readr, tidyr, furrr, future, tools, tictoc, rstac, jsonlite
 )
+# failed to install dplyr, readr, tidyr, 
 
 # 2. Sourced Pipeline Functions
-message("Sourcing pipeline modules from 'function/'...")
-lapply(list.files(path = "function", pattern = ".R", full.names = TRUE), source)
+message("Sourcing pipeline modules from naip/function/...")
+lapply(list.files(path = tof_root("naip/function"), pattern = "[.]R$", full.names = TRUE), source)
 
-# 3. Read and Parse Configuration
-config_file <- "config.yml"
-if (!file.exists(config_file)) {
-  stop("Critical Error: config.yml not found. Please create a valid configuration first.")
-}
-cfg <- yaml::read_yaml(config_file)
+# 3. Read Configuration (the `naip` section of the root config.yml)
+cfg      <- tof_config()
+cfg_naip <- cfg$naip
 
-# Extract config values
-grid_path       <- cfg$paths$grid_gpkg
-sample_f_path   <- cfg$paths$sample_f_csv
-sample_g_path   <- cfg$paths$sample_g_csv
-export_dir      <- cfg$paths$export_dir
+grid_path       <- tof_path(cfg$reference$grid_gpkg)
+sample_f_path   <- tof_path(cfg_naip$paths$sample_f_csv)
+sample_g_path   <- tof_path(cfg_naip$paths$sample_g_csv)
+export_dir      <- tof_path(cfg_naip$paths$export_dir)
 
-target_region    <- cfg$processing$target_region
-target_years     <- as.character(cfg$processing$target_years)
-buffer_dist_m    <- cfg$processing$buffer_dist_m
-run_snic         <- cfg$processing$run_snic
-export_1km_tight <- cfg$processing$export_1km_tight
+target_region    <- cfg_naip$target_region
+target_years     <- as.character(cfg_naip$target_years)
+buffer_dist_m    <- cfg_naip$buffer_dist_m
+run_snic         <- cfg_naip$run_snic
+export_1km_tight <- cfg_naip$export_1km_tight
 
-workers          <- cfg$parallelism$workers
+workers          <- cfg_naip$workers
 
 # 4. Input Validation & Directory Creation
 if (!file.exists(grid_path)) {

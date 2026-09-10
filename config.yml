@@ -1,0 +1,42 @@
+# treesOutsideForests configuration.
+# Every path is relative to the repository root and is resolved with
+# here::here() through shared/R/setup.R, so scripts run from any working
+# directory inside the repo. Open treesOutsideForests.Rproj to guarantee that.
+
+crs: "EPSG:5070"   # analysis CRS: CONUS Albers Equal Area
+
+reference:
+  lrr_gpkg:  "data/reference/lower48LRR.gpkg"
+  mlra_gpkg: "data/reference/lower48MLRA.gpkg"
+  grid_gpkg: "data/reference/grid100km_aea.gpkg"
+
+# ---------------------------------------------------------------- masks/ ----
+masks:
+  llr_id: "F"
+  years: {start: 2009, end: 2021}
+  nlcd_classes: [41, 42, 43]            # NLCD forest classes
+  # FALSE: a year with no Census Places release of its own gets no urban
+  # product. TRUE restores the nearest-year fallback (see masks/README.md).
+  allow_census_year_substitution: false
+  # TRUE re-queries the Census API for years previously marked .unavailable.
+  census_recheck_unavailable: false
+  # Metres added around the LRR bounding box when clipping national NLCD.
+  study_area_margin_m: 5000
+  paths:
+    nlcd_raw:       "data/masks/raw/NLCD"
+    nlcd_processed: "data/masks/processed/NLCD"
+    census_raw:     "data/masks/raw/census"
+    outputs:        "data/masks/outputs/llr_masks"
+
+# ----------------------------------------------------------------- naip/ ----
+naip:
+  target_region: "both"                 # "F", "G", or "both"
+  target_years: ["2012", "2016", "2020"]
+  buffer_dist_m: 250                    # 250 m around the 1 km grid = 1.5 km window
+  run_snic: false
+  export_1km_tight: false
+  workers: 4
+  paths:
+    sample_f_csv: "data/reference/sampleGrids/selectedSample_lrr_F_05_2026.csv"
+    sample_g_csv: "data/reference/sampleGrids/selectedSample_lrr_G_draw_1400_05_2026.csv"
+    export_dir:   "data/naip/exportData"

@@ -6,9 +6,9 @@ By utilizing cloud-native GeoTIFF reads over GDAL virtual file systems (/vsicurl
 
 ---
 
-## The Unified Pipeline (src/run_pipeline.R)
+## The Unified Pipeline (naip/src/run_pipeline.R)
 
-The entire scraping and processing lifecycle is managed by a single entry point: src/run_pipeline.R. All configuration parameters are declared in config.yml.
+The entire scraping and processing lifecycle is managed by a single entry point: naip/src/run_pipeline.R. All configuration parameters are declared in config.yml.
 
 ### How the Pipeline Operates
 1. **Unified Target Table**: Loads coordinate/grid tables (AEA 100km subgrids) dynamically based on LLR regions configured in config.yml.
@@ -27,40 +27,25 @@ The entire scraping and processing lifecycle is managed by a single entry point:
 
 ## Configuration (config.yml)
 
-The pipeline reads settings from config.yml located in the root directory:
+The pipeline reads the `naip` section of the root `config.yml`, plus the shared
+`reference` paths. All paths are relative to the repository root:
 
 ```yaml
-paths:
-  # Master spatial grid (100km equal area Albers)
-  grid_gpkg: "data/grid100km_aea.gpkg"
-  
-  # MLRA boundaries for optional random spatial sampling (LRR F/G boundaries)
-  mlra_gpkg: "data/mlra/lower48MLRA.gpkg"
-  
-  # Input CSV files listing target grid IDs
-  sample_f_csv: "data/LRR_sampleGrids/selectedSample_lrr_F_05_2026.csv"
-  sample_g_csv: "data/LRR_sampleGrids/selectedSample_lrr_G_draw_1400_05_2026.csv"
-  
-  # Output directory where results will be organized directly
-  export_dir: "data/exportData"
+reference:
+  grid_gpkg: "data/reference/grid100km_aea.gpkg"   # master 100 km equal-area grid
+  mlra_gpkg: "data/reference/lower48MLRA.gpkg"     # MLRA boundaries (LRR F/G)
 
-processing:
-  # Target region to process: "F" (LLR F), "G" (LLR G), or "both"
-  target_region: "both"
-
-  # Default years to query via STAC API
+naip:
+  target_region: "both"          # "F", "G", or "both"
   target_years: ["2012", "2016", "2020"]
-  
-  # Buffer distance in meters around the 1km grid (250m buffer yields 1.5km total width)
-  buffer_dist_m: 250
-  
-  # Feature Toggles
-  run_snic: false          # Toggle SNIC superpixel segmentation
-  export_1km_tight: false  # Save a tight 1km NAIP raster besides the buffered one
-
-parallelism:
-  # Number of multisession parallel workers to run in furrr
+  buffer_dist_m: 250             # 250 m around the 1 km grid = 1.5 km window
+  run_snic: false
+  export_1km_tight: false
   workers: 4
+  paths:
+    sample_f_csv: "data/reference/sampleGrids/selectedSample_lrr_F_05_2026.csv"
+    sample_g_csv: "data/reference/sampleGrids/selectedSample_lrr_G_draw_1400_05_2026.csv"
+    export_dir:   "data/naip/exportData"
 ```
 
 ---
@@ -68,7 +53,7 @@ parallelism:
 ## Expected Directory Structure
 
 ```text
-data/exportData/
+data/naip/exportData/
 └── aoi_<aoi_id>_<actual_year>/
     ├── naip_1.5km_<aoi_id>_<actual_year>.tif     <- Contextual buffered image (RGB+NIR, QGIS-optimized)
     ├── naip_1km_<aoi_id>_<actual_year>.tif       <- Modeling core image (only if export_1km_tight: true)
@@ -79,7 +64,7 @@ data/exportData/
 
 ---
 
-## Progress Reporting & Utilities (function/getSTATUS.R)
+## Progress Reporting & Utilities (naip/function/getSTATUS.R)
 
 Since the pipeline operates in a decentralized, database-free manner, progress can be monitored and managed using these built-in utilities:
 
@@ -99,12 +84,12 @@ To guarantee codebase stability, reproducibility, and output parity across paral
 
 1. **Seed & Selection Test (test/test_seed.R)**:
    - Confirms that setting seed 125 on selectedSample_lrr_F_05_2026.csv reliably selects the identical 15 target AOIs.
-   - Run: `Rscript test/test_seed.R`
+   - Run: `Rscript naip/test/test_seed.R`
 
 2. **Sequential vs Parallel Raster Parity (test/test_raster_comparison.R)**:
    - Generates sequential (1 worker) and parallel (4 workers) products for test AOIs and executes a complete element-by-element verification check.
    - Compares band names, count (4 bands), data types (INT1U), coordinate reference systems, extents, resolutions, spatial dimensions, pixel-level values (absolute maximum cell value difference is verified to be exactly 0), alpha color interpretations (ColorInterp=Undefined), and file sizes.
-   - Run: `Rscript test/test_raster_comparison.R`
+   - Run: `Rscript naip/test/test_raster_comparison.R`
 
 ---
 
@@ -116,8 +101,8 @@ To guarantee codebase stability, reproducibility, and output parity across paral
    install.packages("pacman")
    pacman::p_load(yaml, dplyr, sf, terra, readr, tidyr, furrr, future, tools, tictoc, rstac, jsonlite)
    ```
-2. **Setup config.yml**: Modify paths, target years, and parallel workers inside config.yml.
-3. **Execute**: Run the pipeline directly from your shell:
+2. **Setup config.yml**: Edit the `naip` section of the root config.yml (target region, years, workers).
+3. **Execute**: From the repository root:
    ```bash
-   Rscript src/run_pipeline.R
+   Rscript naip/src/run_pipeline.R
    ```

@@ -2,9 +2,10 @@
 library(terra)
 library(jsonlite)
 library(sf)
+source(here::here("shared/R/setup.R"))
 
-seq_dir <- "data/test_sequential"
-par_dir <- "data/test_parallel"
+seq_dir <- tof_root("data/naip/test_sequential")
+par_dir <- tof_root("data/naip/test_parallel")
 
 # Find all subdirectories in sequential output
 seq_subdirs <- list.dirs(seq_dir, full.names = FALSE, recursive = FALSE)

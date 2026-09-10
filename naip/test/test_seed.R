@@ -1,8 +1,9 @@
 # Seed Reproducibility Test
 library(dplyr)
+source(here::here("shared/R/setup.R"))
 
 # 1. Load sample CSV
-csv_path <- "data/LRR_sampleGrids/selectedSample_lrr_F_05_2026.csv"
+csv_path <- tof_path(tof_config()$naip$paths$sample_f_csv)
 if (!file.exists(csv_path)) {
   stop("Missing input CSV file.")
 }
@@ -18,7 +19,7 @@ cat("\n--- Sampled IDs using seed 125 ---\n")
 print(sampled_ids)
 
 # 3. Check against actual directories in data/exportData
-export_dirs <- list.dirs("data/exportData", full.names = FALSE, recursive = FALSE)
+export_dirs <- list.dirs(tof_path(tof_config()$naip$paths$export_dir), full.names = FALSE, recursive = FALSE)
 export_aoi_folders <- export_dirs[grepl("^aoi_", export_dirs)]
 
 # Extract unique AOI IDs from folder names (format: aoi_<id>_<year>)
