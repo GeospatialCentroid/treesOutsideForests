@@ -7,6 +7,7 @@ Pipeline for estimating trees outside forests (TOF) by USDA Land Resource Region
 |-----------|------------------------------------------------------|--------------------|
 | `masks/`  | Annual forest and urban masks per LRR (NLCD, Census) | agroforestry_Masks |
 | `naip/`   | NAIP acquisition and SNIC segmentation over AOIs     | naipScrape         |
+| `sampling/` | Sample design maps and site-role assignment | new; agroforestrySampling to follow |
 
 Each stage keeps its own README. This file covers what is shared.
 
@@ -22,7 +23,8 @@ treesOutsideForests/
 │   ├── masks/                  # large working data for masks/  (ignored)
 │   └── naip/                   # large working data for naip/   (ignored)
 ├── masks/
-└── naip/
+├── naip/
+└── sampling/
 ```
 
 ## Conventions
@@ -44,6 +46,8 @@ treesOutsideForests/
 ```r
 source("masks/0_run.R")             # build the LRR masks
 source("naip/src/run_pipeline.R")   # pull and process NAIP for the sampled grids
+source("sampling/01_map_lrr_sites.R")  # whole-LRR sample design map and site-role assignment
+source("sampling/02_map_mlra_sites.R") # one map pair per MLRA, layers clipped to each MLRA
 ```
 
 or from a shell at the repo root: `Rscript naip/src/run_pipeline.R`.

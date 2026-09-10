@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trees Outside Forests: LRR F sample design</title>
+<style>
+  :root { --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #8a8880; --line: #e3e1da; --bg: #fcfcfb; --card: #ffffff; --accent: #4a3aa7; --accent-2: #e34948; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  header { border-bottom: 1px solid var(--line); background: var(--card); }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 0 20px; }
+  header .wrap { padding-top: 40px; padding-bottom: 32px; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 8px; }
+  .lede { font-size: 1.15rem; color: var(--ink-2); max-width: 44em; margin: 0; }
+  .stats { display: flex; flex-wrap: wrap; gap: 12px 36px; margin: 28px 0 0; padding: 0; list-style: none; }
+  .stats li { display: flex; flex-direction: column; }
+  .stats b { font-size: 1.6rem; line-height: 1.1; }
+  .stats span { color: var(--ink-2); font-size: 0.9rem; }
+  section { padding: 36px 0 8px; }
+  h2 { font-size: 1.35rem; margin: 0 0 12px; }
+  h3 { font-size: 1.05rem; margin: 0 0 4px; }
+  .prose { max-width: 44em; }
+  .prose p, .prose li { color: #2b2a27; }
+  .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 28px; margin: 12px 0 0; padding: 0; list-style: none; }
+  .legend li { padding-left: 26px; position: relative; color: #2b2a27; }
+  .legend li::before { content: ""; position: absolute; left: 0; top: 6px; width: 14px; height: 14px; border-radius: 3px; background: var(--sw); border: 1px solid rgba(0,0,0,.25); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; margin-top: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+  .card .thumb { display: block; aspect-ratio: 4 / 3; background: #f3f2ee; overflow: hidden; }
+  .card img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .card-body { padding: 14px 16px 16px; }
+  .meta { color: var(--ink-2); font-size: 0.9rem; margin: 0 0 8px; }
+  .links { margin: 0; font-size: 0.95rem; }
+  .feature { grid-column: 1 / -1; flex-direction: row; }
+  .feature .thumb { flex: 0 0 55%; aspect-ratio: auto; }
+  @media (max-width: 700px) { .feature { flex-direction: column; } .feature .thumb { flex-basis: auto; aspect-ratio: 4 / 3; } }
+  footer { border-top: 1px solid var(--line); margin-top: 40px; padding: 20px 0 40px; color: var(--ink-3); font-size: 0.85rem; }
+  footer a { color: var(--ink-2); }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>Trees Outside Forests: LRR F sample design</h1>
+    <p class="lede">Where we are looking for trees outside forests across Land Resource Region F,
+       and which sites are used to train and check the detection model.</p>
+    <ul class="stats">
+      <li><b>15,196</b><span>sampled 1 km cells</span></li>
+      <li><b>11</b><span>Major Land Resource Areas</span></li>
+      <li><b>120</b><span>training sites</span></li>
+      <li><b>69</b><span>validation sites</span></li>
+    </ul>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="prose">
+    <h2>About the project</h2>
+    <p>Trees outside forests (TOF) are the windbreaks, riparian strips, farmstead shelterbelts and
+       scattered trees that national forest inventories do not count, yet which matter for carbon,
+       shelter and habitat across the northern Great Plains. This project detects them from
+       high-resolution NAIP aerial imagery and estimates how much of the landscape they cover.</p>
+    <p>Because we cannot classify every image, we work from a sample. LRR F is divided into its
+       11 Major Land Resource Areas (MLRAs), and within each MLRA a set of 1 km grid cells is
+       drawn for imagery acquisition and classification. The maps on this page show that sample and
+       the ground-truth sites that anchor it.</p>
+    <p>The workflow lives in the
+       <a href="https://github.com/GeospatialCentroid/treesOutsideForests">treesOutsideForests</a>
+       repository: annual forest and urban masks from NLCD and the Census, NAIP acquisition and
+       segmentation for the sampled cells, and the sample design shown here.</p>
+  </section>
+
+  <section class="prose">
+    <h2>How to read the maps</h2>
+    <ul class="legend">
+      <li style="--sw:#4a3aa7">Training site: a ground-truth 1 km cell used to fit the model.</li>
+      <li style="--sw:#e34948">Validation site: a ground-truth cell held back to test the model.</li>
+      <li style="--sw:#4a4843">Sampled 1 km cell: drawn for NAIP acquisition (outlines appear when zoomed in).</li>
+      <li style="--sw:#f2d3e0">MLRA fill: pale colour per Major Land Resource Area; hover for its name.</li>
+      <li style="--sw:#eda100">Census places 2020: incorporated places, hidden until switched on.</li>
+      <li style="--sw:#2d6a4f">NLCD forest 2020: share of each block that is forest, hidden until switched on.</li>
+    </ul>
+    <p style="margin-top:14px">Each interactive map has grey and satellite base maps, a layer switcher, and hover
+       labels giving the cell id and MLRA. The print version is the same map as a single PNG.</p>
+  </section>
+
+  <section>
+    <h2>Whole region</h2>
+    <div class="grid">
+      <article class="card feature">
+  <a class="thumb" href="maps/lrr_F_sample_design.html"><img src="maps/thumbs/lrr_F_sample_design.png" alt="LRR F: whole-region sample design" loading="lazy"></a>
+  <div class="card-body">
+    <h3><a href="maps/lrr_F_sample_design.html">LRR F: whole-region sample design</a></h3>
+    <p class="meta">15,196 sampled cells &middot; 120 training &middot; 69 validation</p>
+    <p class="links"><a href="maps/lrr_F_sample_design.html">Interactive map</a> &middot; <a href="maps/lrr_F_sample_design.png">Print map (PNG)</a></p>
+  </div>
+</article>
+    </div>
+  </section>
+
+  <section>
+    <h2>By Major Land Resource Area</h2>
+    <div class="grid">
+      <article class="card">
+  <a class="thumb" href="maps/mlra/lrr_F_mlra_52_sample_design.html"><img src="maps/thumbs/lrr_F_mlra_52_sample_design.png" alt="MLRA 52: Brown Glaciated Plains" loading="lazy"></a>
+  <div class="card-body">
+    <h3><a href="maps/mlra/lrr_F_mlra_52_sample_design.html">MLRA 52: Brown Glaciated Plains</a></h3>
+    <p class="meta">1,380 sampled cells &middot; 16 training &middot; 13 validation</p>
+    <p class="links"><a href="maps/mlra/lrr_F_mlra_52_sample_design.html">Interactive map</a> &middot; <a href="maps/mlra/lrr_F_mlra_52_sample_design.png">Print map (PNG)</a></p>
+  </div>
+</article>
+<article class="card">
+  <a class="thumb" href="maps/mlra/lrr_F_mlra_53A_sample_design.html"><img src="maps/thumbs/lrr_F_mlra_53A_sample_design.png" alt="MLRA 53A: Northern Dark Brown Glaciated Plains" loading="lazy"></a>
+  <div class="card-body">
+    <h3><a href="maps/mlra/lrr_F_mlra_53A_sample_design.html">MLRA 53A: Northern Dark Brown Glaciated Plains</a></h3>
+    <p class="meta">1,369 sampled cells &middot; 6 training &middot; 3 validation</p>
+    <p class="links"><a href="maps/mlra/lrr_F_mlra_53A_sample_design.html">Interactive map</a> &middot; <a href="maps/mlra/lrr_F_mlra_53A_sample_design.png">Print map (PNG)</a></p>
+  </div>
+</article>
+<article class="card">
+  <a class="thumb" href="maps/mlra/lrr_F_mlra_53B_sample_design.html"><img src="maps/thumbs/lrr_F_mlra_53B_sample_design.png" alt="MLRA 53B: Central Dark Brown Glaciated Plains" loading="lazy"></a>
+  <div class="card-body">
+    <h3><a href="maps/mlra/lrr_F_mlra_53B_sample_design.html">MLRA 53B: Central Dark Brown Glaciated Plains</a></h3>
+    <p class="meta">1,409 sampled cells &middot; 17 training &middot; 9 validation</p>
+    <p class="links"><a href="maps/mlra/lrr_F_mlra_53B_sample_design.html">Interactive map</a> &middot; <a href="maps/mlra/lrr_F_mlra_53B_sample_design.png">Print map (PNG)</a></p>
+  </div>
+</article>
+<article class="card">
+  <a class="thumb" href="maps/mlra/lrr_F_mlra_53C_sample_design.html"><img src="maps/thumbs/lrr_F_mlra_53C_sample_design.png" alt="MLRA 53C: Southern Dark Brown Glaciated Plains" loading="lazy"></a>
+  <div class="card-body">
+    <h3><a href="maps/mlra/lrr_F_mlra_53C_sample_design.html">MLRA 53C: Southern Dark Brown Glaciated Plains</a></h3>
+    <p class="meta">1,347 sampled cells &middot; 5 training &middot; 4 validation</p>
+    <p class="links"><a href="maps/mlra/lrr_F_mlra_53C_sample_design.html">Interactive map</a> &middot; <a href="maps/mlra/lrr_F_mlra_53C_sample_design.png">Print map (PNG)</a></p>
+  </div>
+</article>
+<article class="card">
+  <a class="thumb" href="maps/mlra/lrr_F_mlra_54_sample_design.html"><img src="maps/thumbs/lrr_F_mlra_54_sample_design.png" alt="MLRA 54: Rolling Soft Shale Plain" loading="lazy"></a>
+  <div class="card-body">
+    <h3><a href="maps/mlra/lrr_F_mlra_54_sample_design.html">MLRA 54: Rolling Soft Shale Plain</a></h3>
+    <p class="meta">1,382 sampled cells &middot; 30 training &middot; 16 validation</p>
+    <p class="links"><a href="maps/mlra/lrr_F_mlra_54_sample_design.html">Interactive map</a> &middot; <a href="maps/mlra/lrr_F_mlra_54_sample_design.png">Print map (PNG)</a></p>
+  </div>
+</article>
+<article class="card">
+  <a class="thumb" href="maps/mlra/lrr_F_mlra_55A_sample_design.html"><img src="maps/thumbs/lrr_F_mlra_55A_sample_design.png" alt="MLRA 55A: Northern Black Glaciated Plains" loading="lazy"></a>
+  <div class="card-body">
+    <h3><a href="maps/mlra/lrr_F_mlra_55A_sample_design.html">MLRA 55A: Northern Black Glaciated Plains</a></h3>
+    <p class="meta">1,379 sampled cells &middot; 14 training &middot; 3 validation</p>
+    <p class="links"><a href="maps/mlra/lrr_F_mlra_55A_sample_design.html">Interactive map</a> &middot; <a href="maps/mlra/lrr_F_mlra_55A_sample_design.png">Print map (PNG)</a></p>
+  </div>
+</article>
+<article class="card">
+  <a class="thumb" href="maps/mlra/lrr_F_mlra_55B_sample_design.html"><img src="maps/thumbs/lrr_F_mlra_55B_sample_design.png" alt="MLRA 55B: Central Black Glaciated Plains" loading="lazy"></a>
+  <div class="card-body">
+    <h3><a href="maps/mlra/lrr_F_mlra_55B_sample_design.html">MLRA 55B: Central Black Glaciated Plains</a></h3>
+    <p class="meta">1,418 sampled cells &middot; 15 training &middot; 10 validation</p>
+    <p class="links"><a href="maps/mlra/lrr_F_mlra_55B_sample_design.html">Interactive map</a> &middot; <a href="maps/mlra/lrr_F_mlra_55B_sample_design.png">Print map (PNG)</a></p>
+  </div>
+</article>
+<article class="card">
+  <a class="thumb" href="maps/mlra/lrr_F_mlra_55C_sample_design.html"><img src="maps/thumbs/lrr_F_mlra_55C_sample_design.png" alt="MLRA 55C: Southern Black Glaciated Plains" loading="lazy"></a>
+  <div class="card-body">
+    <h3><a href="maps/mlra/lrr_F_mlra_55C_sample_design.html">MLRA 55C: Southern Black Glaciated Plains</a></h3>
+    <p class="meta">1,415 sampled cells &middot; 9 training &middot; 3 validation</p>
+    <p class="links"><a href="maps/mlra/lrr_F_mlra_55C_sample_design.html">Interactive map</a> &middot; <a href="maps/mlra/lrr_F_mlra_55C_sample_design.png">Print map (PNG)</a></p>
+  </div>
+</article>
+<article class="card">
+  <a class="thumb" href="maps/mlra/lrr_F_mlra_55D_sample_design.html"><img src="maps/thumbs/lrr_F_mlra_55D_sample_design.png" alt="MLRA 55D: Glacial Lake Dakota" loading="lazy"></a>
+  <div class="card-body">
+    <h3><a href="maps/mlra/lrr_F_mlra_55D_sample_design.html">MLRA 55D: Glacial Lake Dakota</a></h3>
+    <p class="meta">1,359 sampled cells &middot; 2 training &middot; 1 validation</p>
+    <p class="links"><a href="maps/mlra/lrr_F_mlra_55D_sample_design.html">Interactive map</a> &middot; <a href="maps/mlra/lrr_F_mlra_55D_sample_design.png">Print map (PNG)</a></p>
+  </div>
+</article>
+<article class="card">
+  <a class="thumb" href="maps/mlra/lrr_F_mlra_56A_sample_design.html"><img src="maps/thumbs/lrr_F_mlra_56A_sample_design.png" alt="MLRA 56A: Glacial Lake Agassiz, Red River Valley" loading="lazy"></a>
+  <div class="card-body">
+    <h3><a href="maps/mlra/lrr_F_mlra_56A_sample_design.html">MLRA 56A: Glacial Lake Agassiz, Red River Valley</a></h3>
+    <p class="meta">1,401 sampled cells &middot; 5 training &middot; 7 validation</p>
+    <p class="links"><a href="maps/mlra/lrr_F_mlra_56A_sample_design.html">Interactive map</a> &middot; <a href="maps/mlra/lrr_F_mlra_56A_sample_design.png">Print map (PNG)</a></p>
+  </div>
+</article>
+<article class="card">
+  <a class="thumb" href="maps/mlra/lrr_F_mlra_56B_sample_design.html"><img src="maps/thumbs/lrr_F_mlra_56B_sample_design.png" alt="MLRA 56B: Glacial Lake Agassiz, Tallgrass Aspen Parklands" loading="lazy"></a>
+  <div class="card-body">
+    <h3><a href="maps/mlra/lrr_F_mlra_56B_sample_design.html">MLRA 56B: Glacial Lake Agassiz, Tallgrass Aspen Parklands</a></h3>
+    <p class="meta">1,337 sampled cells &middot; 1 training &middot; 0 validation</p>
+    <p class="links"><a href="maps/mlra/lrr_F_mlra_56B_sample_design.html">Interactive map</a> &middot; <a href="maps/mlra/lrr_F_mlra_56B_sample_design.png">Print map (PNG)</a></p>
+  </div>
+</article>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    Built 10 September 2026 from commit <code>b346501</code>. Training and validation sites are the June 2026
+    ground-truth cells inside LRR F, split at random (seed 125).
+    Source: <a href="https://github.com/GeospatialCentroid/treesOutsideForests">GeospatialCentroid/treesOutsideForests</a>.
+  </div>
+</footer>
+</body>
+</html>

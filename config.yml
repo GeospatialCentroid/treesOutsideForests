@@ -40,3 +40,25 @@ naip:
     sample_f_csv: "data/reference/sampleGrids/selectedSample_lrr_F_05_2026.csv"
     sample_g_csv: "data/reference/sampleGrids/selectedSample_lrr_G_draw_1400_05_2026.csv"
     export_dir:   "data/naip/exportData"
+
+# ------------------------------------------------------------- sampling/ ----
+sampling:
+  llr_id: "F"
+  seed: 125                 # same seed the naip tests use, for reproducible draws
+  # Ground-truth sites inside the LRR are split at random into two roles.
+  # n_training is taken first; validation gets what remains, capped at n_validation.
+  n_training: 120
+  n_validation: 70
+  interactive_grid_min_zoom: 9    # zoom level at which the sampled 1 km cell outlines appear on the web map
+  context_year: 2020              # year of the Census places and NLCD forest context layers
+  # Block size (in 30 m pixels) used to coarsen the NLCD forest mask for the web maps:
+  forest_block_lrr: 16            # 480 m for the whole-LRR map
+  forest_block_mlra: 8            # 240 m for the per-MLRA maps
+  mlra_margin_m: 20000            # map margin around each MLRA
+  paths:
+    sample_csv:      "data/reference/sampleGrids/selectedSample_lrr_F_05_2026.csv"
+    groundtruth_csv: "data/reference/sampleGrids/groundTruth_ids_lrr_F_06_2026.csv"
+    roles_csv:       "data/reference/sampleGrids/siteRoles_lrr_F_09_2026.csv"
+    map_dir:         "data/sampling/maps"
+    derived_dir:     "data/sampling/derived"      # cached, coarsened context layers
+    masks_outputs:   "data/masks/outputs/llr_masks" # products of the masks/ stage
