@@ -35,7 +35,7 @@ naip:
   buffer_dist_m: 250                    # 250 m around the 1 km grid = 1.5 km window
   run_snic: false
   export_1km_tight: false
-  workers: 4
+  workers: 8
   paths:
     sample_f_csv: "data/reference/sampleGrids/selectedSample_lrr_F_05_2026.csv"
     sample_g_csv: "data/reference/sampleGrids/selectedSample_lrr_G_draw_1400_05_2026.csv"

@@ -1,5 +1,11 @@
 #' Compile all JSON status trackers into a master data frame
 #'
+#' Reads every status.json written by process_aoi() (one per AOI-year folder)
+#' and returns one row per file: aoi_id, target_year, actual_year, status,
+#' capture_dates, item_ids, naip_states, plus the folder and the file's
+#' modification time. Fields missing from a file (a failed task has no tile
+#' metadata) come back NA.
+#'
 #' @param local_working_dir Character. Path to the local processing/export directory.
 #' @return A data frame containing all completed/partial/failed status records.
 compileStatus <- function(local_working_dir = tof_path(tof_config()$naip$paths$export_dir)) {
@@ -9,64 +15,36 @@ compileStatus <- function(local_working_dir = tof_path(tof_config()$naip$paths$e
     recursive = TRUE,
     full.names = TRUE
   )
-  
+
   if (length(status_files) == 0) {
     message("No status.json files found on disk.")
     return(NULL)
   }
-  
+
+  fields <- c("aoi_id", "target_year", "actual_year", "status",
+              "capture_dates", "item_ids", "naip_states")
+  pick <- function(js, key) {
+    v <- js[[key]]
+    if (is.null(v) || length(v) == 0) NA_character_ else paste(as.character(v), collapse = "; ")
+  }
+
   results_list <- lapply(status_files, function(f) {
     tryCatch({
-      js <- jsonlite::fromJSON(f)
-      
-      # Flatten list fields into comma-separated strings for spreadsheet compatibility
-      flat_res <- list(
-        aoi_id   = js$aoi_id,
-        batch_id = js$batch_id,
-        status   = js$status,
-        year_1   = js$year_1,
-        year_2   = js$year_2,
-        year_3   = js$year_3
-      )
-      
-      # Helper to extract and paste metadata values
-      extract_meta <- function(meta, key) {
-        if (is.null(meta) || is.null(meta[[key]])) return(NA)
-        paste(meta[[key]], collapse = "; ")
-      }
-      
-      if (!is.null(js$year_1_meta)) {
-        flat_res$y1_actual_year   <- extract_meta(js$year_1_meta, "actual_year")
-        flat_res$y1_capture_dates <- extract_meta(js$year_1_meta, "capture_dates")
-        flat_res$y1_item_ids      <- extract_meta(js$year_1_meta, "item_ids")
-        flat_res$y1_naip_states   <- extract_meta(js$year_1_meta, "naip_states")
-      }
-      
-      if (!is.null(js$year_2_meta)) {
-        flat_res$y2_actual_year   <- extract_meta(js$year_2_meta, "actual_year")
-        flat_res$y2_capture_dates <- extract_meta(js$year_2_meta, "capture_dates")
-        flat_res$y2_item_ids      <- extract_meta(js$year_2_meta, "item_ids")
-        flat_res$y2_naip_states   <- extract_meta(js$year_2_meta, "naip_states")
-      }
-      
-      if (!is.null(js$year_3_meta)) {
-        flat_res$y3_actual_year   <- extract_meta(js$year_3_meta, "actual_year")
-        flat_res$y3_capture_dates <- extract_meta(js$year_3_meta, "capture_dates")
-        flat_res$y3_item_ids      <- extract_meta(js$year_3_meta, "item_ids")
-        flat_res$y3_naip_states   <- extract_meta(js$year_3_meta, "naip_states")
-      }
-      
-      return(flat_res)
+      js  <- jsonlite::fromJSON(f)
+      row <- lapply(fields, function(k) pick(js, k))
+      names(row) <- fields
+      row$folder   <- basename(dirname(f))
+      row$modified <- file.mtime(f)
+      as.data.frame(row, stringsAsFactors = FALSE)
     }, error = function(e) NULL)
   })
-  
+
   results_list <- results_list[!sapply(results_list, is.null)]
-  
+
   if (length(results_list) > 0) {
-    master_df <- dplyr::bind_rows(results_list)
-    return(master_df)
+    dplyr::bind_rows(results_list)
   } else {
-    return(NULL)
+    NULL
   }
 }
 

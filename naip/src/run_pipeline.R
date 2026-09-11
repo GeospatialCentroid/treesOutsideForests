@@ -17,7 +17,14 @@ pacman::p_load(
 
 # 2. Sourced Pipeline Functions
 message("Sourcing pipeline modules from naip/function/...")
-lapply(list.files(path = tof_root("naip/function"), pattern = "[.]R$", full.names = TRUE), source)
+invisible(lapply(list.files(path = tof_root("naip/function"), pattern = "[.]R$", full.names = TRUE), source))
+
+# readr guesses the LRR symbol "F" as logical FALSE (and "G" as character), so
+# the two sample tables could not be bound together; read LLR_ID as text.
+read_sample_csv <- function(path) {
+  readr::read_csv(path, show_col_types = FALSE,
+                  col_types = readr::cols(LLR_ID = readr::col_character(), .default = readr::col_guess()))
+}
 
 # 3. Read Configuration (the `naip` section of the root config.yml)
 cfg      <- tof_config()
@@ -48,7 +55,7 @@ tasks_list <- list()
 
 if (target_region %in% c("F", "both")) {
   if (file.exists(sample_f_path)) {
-    f_tbl <- readr::read_csv(sample_f_path, show_col_types = FALSE) |>
+    f_tbl <- read_sample_csv(sample_f_path) |>
       dplyr::mutate(region = "F")
     tasks_list[[length(tasks_list) + 1]] <- f_tbl
     message(sprintf("  -> Loaded LLR F sample grid list: %d unique sites.", nrow(f_tbl)))
@@ -59,7 +66,7 @@ if (target_region %in% c("F", "both")) {
 
 if (target_region %in% c("G", "both")) {
   if (file.exists(sample_g_path)) {
-    g_tbl <- readr::read_csv(sample_g_path, show_col_types = FALSE) |>
+    g_tbl <- read_sample_csv(sample_g_path) |>
       dplyr::mutate(region = "G")
     tasks_list[[length(tasks_list) + 1]] <- g_tbl
     message(sprintf("  -> Loaded LLR G sample grid list: %d unique sites.", nrow(g_tbl)))
@@ -131,7 +138,11 @@ results <- furrr::future_map(
     )
   },
   .progress = TRUE,
-  .options = furrr::furrr_options(seed = TRUE)
+  # Small chunks: with the default (one chunk per worker) nothing is relayed
+  # from the workers - no progress, no messages, no results - until a worker
+  # finishes its whole share, which for the full sample is days. Twenty tasks
+  # per chunk keeps the per-future overhead negligible.
+  .options = furrr::furrr_options(seed = TRUE, chunk_size = 20)
 )
 
 tictoc::toc()
