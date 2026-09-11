@@ -11,7 +11,6 @@ training: 1
 validation: 0
 ---
 
-
 <!-- Edit this text freely. The build script only refreshes the front matter above. -->
 
 Sample design for MLRA 56B, Glacial Lake Agassiz, Tallgrass Aspen Parklands, within LRR F: the 1 km cells drawn for

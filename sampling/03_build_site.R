@@ -73,14 +73,15 @@ counts <- function(r) sprintf("%s sampled cells &middot; %d training &middot; %d
 rel <- function(...) file.path("maps", ...)
 card <- function(title, blurb, stub, dir = NULL) {
   page <- paste0(rel(stub), "/")                      # Jekyll page: maps/<stub>/ (see docs/_config.yml)
-  pngp <- if (is.null(dir)) rel(paste0(stub, ".png")) else rel(dir, paste0(stub, ".png"))
+  raw  <- if (is.null(dir)) rel(paste0(stub, ".html")) else rel(dir, paste0(stub, ".html"))   # the Leaflet page itself
+  pngp <- sub("[.]html$", ".png", raw)
   glue::glue('
     <article class="card">
       <a class="thumb" href="{page}"><img src="{rel("thumbs", paste0(stub, ".png"))}" alt="{title}" loading="lazy"></a>
       <div class="card-body">
         <h3><a href="{page}">{title}</a></h3>
         <p class="meta">{blurb}</p>
-        <p class="links"><a href="{page}">Interactive map</a> &middot; <a href="{pngp}">Print map (PNG)</a></p>
+        <p class="links"><a href="{page}">Map page</a> &middot; <a href="{raw}">Full-screen map</a> &middot; <a href="{pngp}">Print map (PNG)</a></p>
       </div>
     </article>')
 }
@@ -105,6 +106,7 @@ write_map_page <- function(stub, front, default_body) {
     if (length(fences) >= 2 && fences[2] < length(lines))
       body <- paste(lines[(fences[2] + 1):length(lines)], collapse = "\n")
   }
+  body <- gsub("^\n+|\n+$", "", body)   # one blank line after the front matter, not one more per rebuild
   yml <- yaml::as.yaml(front, indent.mapping.sequence = TRUE)
   writeLines(c("---", sub("\n$", "", yml), "---", "", body), path)
   path

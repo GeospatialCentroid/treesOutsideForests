@@ -9,7 +9,6 @@ training: 120
 validation: 69
 ---
 
-
 <!-- Edit this text freely. The build script only refreshes the front matter above. -->
 
 The whole of Land Resource Region F with its 11 Major Land Resource

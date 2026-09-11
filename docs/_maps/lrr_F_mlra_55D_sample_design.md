@@ -11,7 +11,6 @@ training: 2
 validation: 1
 ---
 
-
 <!-- Edit this text freely. The build script only refreshes the front matter above. -->
 
 Sample design for MLRA 55D, Glacial Lake Dakota, within LRR F: the 1 km cells drawn for

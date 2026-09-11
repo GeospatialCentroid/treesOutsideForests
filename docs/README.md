@@ -15,8 +15,8 @@ the `docs/index.html` gallery that links to them. Jekyll renders each
 Markdown page inside `docs/_layouts/map.html`, which adds the site header
 with a link home, embeds the Leaflet page in an iframe, and adds
 previous/next links. Building the maps needs the NAS data, so the build runs
-locally; committing `docs/` and pushing is the deploy. No GitHub Actions and
-no custom build step on GitHub's side.
+locally; committing `docs/` and pushing is the deploy. A small GitHub Actions
+workflow runs Jekyll and publishes the result.
 
 Published URL, once enabled:
 `https://geospatialcentroid.github.io/treesOutsideForests/`
@@ -28,7 +28,8 @@ Published URL, once enabled:
 | `docs/` on `main`, not a `gh-pages` branch | One branch to maintain; the site is versioned with the code that made it. |
 | Build locally, commit the output | The map inputs are ~100 GB on the NAS. A cloud build cannot reproduce them, so the artefacts are the source of truth for the site. |
 | Plain generated HTML index | The landing page is written directly by the build script, so it needs no template engine. Jekyll copies it through untouched because it has no front matter. |
-| Jekyll for the per-map pages | It is built into GitHub Pages, so Markdown pages with a shared layout cost nothing to host. Nothing is installed on GitHub's side. |
+| Jekyll for the per-map pages | It is the site generator GitHub Pages supports natively, so Markdown pages with a shared layout cost nothing to host. A 20-line workflow runs it. |
+| Every card links to the raw Leaflet page too | `maps/<name>.html` is a plain file that works with or without Jekyll, so the interactive maps stay reachable even if a site build breaks. |
 | Map pages are Markdown in `_maps/` | The build script rewrites the front matter (title, counts, file paths) every run but keeps the body text, so notes written by hand survive a rebuild. |
 | Raw Leaflet pages stay at `maps/<name>.html` | The Markdown page renders at `maps/<name>/`, so the two never collide and the raw page still works as a full-screen view. |
 | Interactive maps share one `libs/` folder per directory | Self-contained pages need `pandoc`. Without it, htmlwidgets writes the Leaflet JS/CSS once per folder (`maps/libs/`, `maps/mlra/libs/`) rather than a sidecar per page; if `pandoc` is installed later the same script produces single-file pages with no other change. |
@@ -89,9 +90,14 @@ plenty of headroom for more LRRs and years.
 3. **Commit `docs/`.** Do not add a `.nojekyll` file; it would switch off the
    Jekyll pass and the map pages would not be rendered.
 
-4. **Enable Pages.** Settings, Pages, Source: Deploy from a branch, Branch:
-   `main`, Folder: `/docs`. GitHub publishes within a minute or two of every
-   push that touches `docs/`.
+4. **Enable Pages.** Settings, Pages, Source: **GitHub Actions**. The
+   workflow in `.github/workflows/pages.yml` then builds `docs/` with Jekyll
+   and publishes it on every push that touches `docs/`, usually within a
+   minute or two. Its runs, and any Jekyll error, show under the Actions tab.
+
+   Do not use "Deploy from a branch" for this site. In that mode GitHub decides
+   on its own whether to run Jekyll, and for this repository it published
+   `docs/` as plain static files, so the Markdown map pages came back 404.
 
 5. **Routine.** After changing maps:
 

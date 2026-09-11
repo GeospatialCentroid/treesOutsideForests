@@ -11,7 +11,6 @@ training: 30
 validation: 16
 ---
 
-
 <!-- Edit this text freely. The build script only refreshes the front matter above. -->
 
 Sample design for MLRA 54, Rolling Soft Shale Plain, within LRR F: the 1 km cells drawn for

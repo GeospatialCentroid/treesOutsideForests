@@ -11,7 +11,6 @@ training: 9
 validation: 3
 ---
 
-
 <!-- Edit this text freely. The build script only refreshes the front matter above. -->
 
 Sample design for MLRA 55C, Southern Black Glaciated Plains, within LRR F: the 1 km cells drawn for

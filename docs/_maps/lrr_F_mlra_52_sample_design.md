@@ -11,7 +11,6 @@ training: 16
 validation: 13
 ---
 
-
 <!-- Edit this text freely. The build script only refreshes the front matter above. -->
 
 Sample design for MLRA 52, Brown Glaciated Plains, within LRR F: the 1 km cells drawn for
