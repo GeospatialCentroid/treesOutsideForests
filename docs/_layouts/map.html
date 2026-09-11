@@ -1,0 +1,54 @@
+---
+layout: default
+---
+{%- comment -%}
+Layout for one map page. Front matter fields written by sampling/03_build_site.R:
+  title, crumb, map (path to the Leaflet page), png, sampled, training, validation, order,
+  and mlra_name for MLRA pages. The Markdown body of the page is rendered below the map.
+{%- endcomment -%}
+<style>
+  .map-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 24px; }
+  .meta { color: var(--ink-2); margin: 0; }
+  .map-links { margin: 0; font-size: 0.95rem; white-space: nowrap; }
+  .map-frame { margin: 16px 0 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
+  .map-frame iframe { display: block; width: 100%; height: min(78vh, 900px); min-height: 480px; border: 0; }
+  .pager { display: flex; justify-content: space-between; gap: 16px; margin-top: 36px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 0.95rem; }
+  .pager .next { margin-left: auto; text-align: right; }
+  .pager small { display: block; color: var(--ink-3); }
+</style>
+
+<div class="map-head">
+  <div>
+    <h1>{{ page.title }}</h1>
+    <p class="meta">{{ page.sampled }} sampled 1 km cells &middot; {{ page.training }} training &middot; {{ page.validation }} validation sites</p>
+  </div>
+  <p class="map-links">
+    <a href="{{ page.map | relative_url }}" target="_blank" rel="noopener">Open map full screen</a> &middot;
+    <a href="{{ page.png | relative_url }}">Print map (PNG)</a>
+  </p>
+</div>
+
+<div class="map-frame">
+  <iframe src="{{ page.map | relative_url }}" title="{{ page.title }}: interactive map"></iframe>
+</div>
+
+<div class="prose">
+{{ content }}
+</div>
+
+{%- assign maps = site.maps | sort: "order" -%}
+{%- for m in maps -%}
+  {%- if m.url == page.url -%}
+    {%- assign idx = forloop.index0 -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- assign prev_i = idx | minus: 1 -%}
+{%- assign next_i = idx | plus: 1 -%}
+<nav class="pager">
+  {%- if prev_i >= 0 -%}{%- assign p = maps[prev_i] -%}
+  <a class="prev" href="{{ p.url | relative_url }}"><small>Previous</small>&larr; {{ p.title }}</a>
+  {%- endif -%}
+  {%- if next_i < maps.size -%}{%- assign n = maps[next_i] -%}
+  <a class="next" href="{{ n.url | relative_url }}"><small>Next</small>{{ n.title }} &rarr;</a>
+  {%- endif -%}
+</nav>

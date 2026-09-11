@@ -1,0 +1,22 @@
+# Jekyll settings for the GitHub Pages site served from docs/ on main.
+# GitHub builds this automatically on every push; see README.md in this folder.
+title: Trees Outside Forests
+description: Sample design maps for detecting trees outside forests across the northern Great Plains.
+url: https://geospatialcentroid.github.io
+baseurl: /treesOutsideForests          # the repository name; change if the repo is renamed
+repo_url: https://github.com/GeospatialCentroid/treesOutsideForests
+
+# Each map page is a Markdown file in _maps/. Jekyll renders them at /maps/<name>/
+# so they never collide with the raw Leaflet pages at /maps/<name>.html.
+collections:
+  maps:
+    output: true
+    permalink: /maps/:path/        # :path keeps case and underscores; :name would slugify them
+    sort_by: order
+
+defaults:
+  - scope: { path: "", type: maps }
+    values: { layout: map }
+
+markdown: kramdown
+exclude: [README.md]

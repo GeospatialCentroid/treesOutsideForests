@@ -1,16 +1,18 @@
 # ==============================================================================
 # Build the GitHub Pages site in docs/: mirror the finished maps from
-# data/sampling/maps/, make gallery thumbnails, and write docs/index.html, a
-# landing page with project context that links to every map page.
+# data/sampling/maps/, make gallery thumbnails, write one Markdown page per map
+# into docs/_maps/ (front matter is regenerated, the body text is yours to edit
+# and is preserved), and write docs/index.html, a landing page with project
+# context that links to every map page.
 #
 # Run after 01_map_lrr_sites.R and 02_map_mlra_sites.R, then commit docs/ and
-# push; GitHub Pages (Settings > Pages, branch main, folder /docs) publishes it.
-# See docs/README.md for the plan and rationale.
+# push; GitHub Pages (Settings > Pages, branch main, folder /docs) runs Jekyll
+# and publishes it. See docs/README.md for the plan and rationale.
 #
 # Run from the root project:  source("sampling/03_build_site.R")
 # ==============================================================================
 source(here::here("shared/R/setup.R"))
-pacman::p_load(sf, dplyr, readr, png, glue)
+pacman::p_load(sf, dplyr, readr, png, glue, yaml)
 source(tof_root("sampling/functions/grid_cells.R"))
 
 cfg     <- tof_config()
@@ -19,6 +21,7 @@ llr_id  <- cfg_smp$llr_id
 src_dir <- tof_path(cfg_smp$paths$map_dir)
 docs    <- tof_root("docs")
 dst_dir <- file.path(docs, "maps")
+pages_dir <- file.path(docs, "_maps")   # Jekyll collection: one Markdown page per map
 thumb_dir <- file.path(dst_dir, "thumbs")
 max_file_mb <- 95      # GitHub refuses files over 100 MB
 
@@ -39,7 +42,7 @@ for (f in src_files) {
 }
 message(sprintf("Mirrored %d files (%.1f MB) into %s", length(src_files),
                 sum(file.size(file.path(src_dir, src_files))) / 1024^2, dst_dir))
-invisible(file.create(file.path(docs, ".nojekyll")))
+unlink(file.path(docs, ".nojekyll"))   # the site is rendered by Jekyll; this file would switch it off
 
 # --- 2. Thumbnails (block-mean downsample with the png package) ---------------
 thumbnail <- function(src, dst, width = 640) {
@@ -69,15 +72,15 @@ counts <- function(r) sprintf("%s sampled cells &middot; %d training &middot; %d
                               sum(r$role == "training"), sum(r$role == "validation"))
 rel <- function(...) file.path("maps", ...)
 card <- function(title, blurb, stub, dir = NULL) {
-  html <- if (is.null(dir)) rel(paste0(stub, ".html")) else rel(dir, paste0(stub, ".html"))
-  pngp <- sub("[.]html$", ".png", html)
+  page <- paste0(rel(stub), "/")                      # Jekyll page: maps/<stub>/ (see docs/_config.yml)
+  pngp <- if (is.null(dir)) rel(paste0(stub, ".png")) else rel(dir, paste0(stub, ".png"))
   glue::glue('
     <article class="card">
-      <a class="thumb" href="{html}"><img src="{rel("thumbs", paste0(stub, ".png"))}" alt="{title}" loading="lazy"></a>
+      <a class="thumb" href="{page}"><img src="{rel("thumbs", paste0(stub, ".png"))}" alt="{title}" loading="lazy"></a>
       <div class="card-body">
-        <h3><a href="{html}">{title}</a></h3>
+        <h3><a href="{page}">{title}</a></h3>
         <p class="meta">{blurb}</p>
-        <p class="links"><a href="{html}">Interactive map</a> &middot; <a href="{pngp}">Print map (PNG)</a></p>
+        <p class="links"><a href="{page}">Interactive map</a> &middot; <a href="{pngp}">Print map (PNG)</a></p>
       </div>
     </article>')
 }
@@ -88,7 +91,61 @@ mlra_cards <- vapply(seq_len(nrow(mlra)), function(i) {
        sprintf("lrr_%s_mlra_%s_sample_design", llr_id, sym), dir = "mlra")
 }, character(1))
 
-# --- 4. Landing page ----------------------------------------------------------
+# --- 4. One Markdown page per map in docs/_maps/ ------------------------------
+# Jekyll renders _maps/<stub>.md at maps/<stub>/ using _layouts/map.html, which
+# embeds the Leaflet page in an iframe under a header that links back home.
+# The front matter is rewritten on every build; the Markdown body below it is
+# kept if the file already exists, so notes written by hand survive a rebuild.
+write_map_page <- function(stub, front, default_body) {
+  path <- file.path(pages_dir, paste0(stub, ".md"))
+  body <- default_body
+  if (file.exists(path)) {
+    lines <- readLines(path, warn = FALSE)
+    fences <- which(trimws(lines) == "---")
+    if (length(fences) >= 2 && fences[2] < length(lines))
+      body <- paste(lines[(fences[2] + 1):length(lines)], collapse = "\n")
+  }
+  yml <- yaml::as.yaml(front, indent.mapping.sequence = TRUE)
+  writeLines(c("---", sub("\n$", "", yml), "---", "", body), path)
+  path
+}
+dir.create(pages_dir, showWarnings = FALSE)
+lrr_stub <- sprintf("lrr_%s_sample_design", llr_id)
+lrr_page <- write_map_page(lrr_stub,
+  list(title = sprintf("LRR %s: whole-region sample design", llr_id),
+       crumb = sprintf("LRR %s", llr_id), order = 0L,
+       map = rel(paste0(lrr_stub, ".html")), png = rel(paste0(lrr_stub, ".png")),
+       sampled = format(sum(roles$role == "sample"), big.mark = ","),
+       training = sum(roles$role == "training"), validation = sum(roles$role == "validation")),
+  glue::glue("
+    <!-- Edit this text freely. The build script only refreshes the front matter above. -->
+
+    The whole of Land Resource Region {llr_id} with its {nrow(mlra)} Major Land Resource
+    Areas, the 1 km cells drawn for NAIP acquisition, and the ground-truth sites
+    used to train and validate the detection model. Use the layer switcher to
+    show the Census places and NLCD forest context layers; sampled cell outlines
+    appear once you zoom in."))
+mlra_pages <- vapply(seq_len(nrow(mlra)), function(i) {
+  sym <- mlra$MLRARSYM[i]; nm <- mlra$MLRA_NAME[i]
+  stub <- sprintf("lrr_%s_mlra_%s_sample_design", llr_id, sym)
+  r <- roles[roles$MLRARSYM %in% sym, ]
+  write_map_page(stub,
+    list(title = sprintf("MLRA %s: %s", sym, nm), crumb = sprintf("MLRA %s", sym),
+         order = i, mlra = as.character(sym), mlra_name = nm,
+         map = rel("mlra", paste0(stub, ".html")), png = rel("mlra", paste0(stub, ".png")),
+         sampled = format(sum(r$role == "sample"), big.mark = ","),
+         training = sum(r$role == "training"), validation = sum(r$role == "validation")),
+    glue::glue("
+      <!-- Edit this text freely. The build script only refreshes the front matter above. -->
+
+      Sample design for MLRA {sym}, {nm}, within LRR {llr_id}: the 1 km cells drawn for
+      NAIP acquisition and the ground-truth sites inside this MLRA."))
+}, character(1))
+stale <- setdiff(list.files(pages_dir, "[.]md$", full.names = TRUE), c(lrr_page, mlra_pages))
+if (length(stale) > 0) { unlink(stale); message("Removed ", length(stale), " stale map page(s)") }
+message("Wrote ", 1 + length(mlra_pages), " map pages into ", pages_dir)
+
+# --- 5. Landing page ----------------------------------------------------------
 commit <- tryCatch(system2("git", c("-C", shQuote(tof_root()), "rev-parse", "--short", "HEAD"), stdout = TRUE), error = function(e) "unknown")
 built  <- format(Sys.Date(), "%d %B %Y")
 n_cells <- format(sum(roles$role == "sample"), big.mark = ",")
