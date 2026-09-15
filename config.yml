@@ -62,3 +62,35 @@ sampling:
     map_dir:         "data/sampling/maps"
     derived_dir:     "data/sampling/derived"      # cached, coarsened context layers
     masks_outputs:   "data/masks/outputs/llr_masks" # products of the masks/ stage
+  # Systematic sample grid (00_draw_sample_grid.R): about n_per_mlra 1 km cells
+  # per MLRA, one seeded regular-lattice draw per MLRA. These values reproduce
+  # the May 2026 reference lists byte-for-byte; sampling/test/ checks that.
+  grid:
+    lrr_ids: ["F", "G"]
+    n_per_mlra: 1400
+    seed: 1234
+    out_dir: "data/sampling/sampleGrids"
+    # Boundary-marginal 1 km cells and whether the March 2026 grid (the frame
+    # of the reference draws) contained them; pins the frame across PROJ/GEOS versions.
+    frame_corrections: "data/reference/sampleGrids/sampleFrame_marginalCells_03_2026.csv"
+    reference:                        # tracked draws the replication test compares against
+      F: "data/reference/sampleGrids/selectedSample_lrr_F_05_2026.csv"
+      G: "data/reference/sampleGrids/selectedSample_lrr_G_draw_1400_05_2026.csv"
+
+# ------------------------------------------------------------ estimates/ ----
+estimates:
+  llr_id: "F"
+  target_years: ["2012", "2016", "2020"]   # naip target years to summarise
+  # Model output per cell and actual NAIP year: a raster over the 1 km cell with
+  # 1 = trees outside forest, 0 = not, NA = masked out (Census place / NLCD
+  # forest). {id} and {year} in the pattern are the cell id and the actual year.
+  model_pattern: "tof_{id}_{year}.tif"
+  # Denominator the estimators take as "eligible": "mask" measures it from the
+  # masks/ products; "model" takes the non-NA area of the model raster.
+  eligible_from: "mask"
+  paths:
+    sample_csv:      "data/reference/sampleGrids/selectedSample_lrr_F_05_2026.csv"
+    masks_outputs:   "data/masks/outputs/llr_masks"
+    naip_export_dir: "data/naip/exportData"
+    model_dir:       "data/tof/predictions"
+    out_dir:         "data/estimates"
