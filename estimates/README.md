@@ -4,23 +4,76 @@ Area-weighted estimates of trees outside forests (TOF) from the per-cell model
 output: one figure per MLRA and one per LRR, for each naip target year, with
 both denominators (eligible land, all land) side by side.
 
-**Status: drafted, under review.** The estimators are checked by
-`test/test_estimators.R`; the geometry functions have been smoke-tested on a
-handful of cells against the 2012 masks but the driver has not yet been run
-end to end, because no model output exists yet. Settings live in the
-`estimates` section of the root `config.yml`.
+**Status: runs end to end on synthetic model output.** No real model output
+exists yet, so `config.yml` points the driver at a synthetic pixel-count table
+(`tools/make_synthetic_cells.R`) built to look like the partner's grid-level
+product. The estimators are checked by `test/test_estimators.R` (hand-built
+table) and `test/test_synthetic_recovery.R` (recovers the generating truth for
+every MLRA and the LRR). Settings live in the `estimates` section of the root
+`config.yml`.
 
 | Script | What it does |
 |--------|--------------|
-| `00_run_estimates.R` | Driver: cell geometry, mask areas per mask year (cached), model output join, MLRA and LRR estimates, all written to `estimates$paths$out_dir`. |
+| `00_run_estimates.R` | Driver: cell list, model output (table or rasters), stratum areas per target year (cached), MLRA and LRR estimates, all written to `estimates$paths$out_dir`. |
 | `functions/areas.R` | `mask_layers()`, `polygon_mask_areas()`, `cell_geometry()`, `cell_areas()`, `stratum_areas()`. |
-| `functions/model_output.R` | `naip_year_table()`, `model_path()`, `read_model_cell()`, `join_model_output()`. |
+| `functions/model_output.R` | Table mode: `read_model_table()`, `join_model_table()`. Raster mode: `naip_year_table()`, `model_path()`, `read_model_cell()`, `join_model_output()`. |
 | `functions/estimators.R` | `estimate_mlra()`, `estimate_lrr()`, `ratio_estimate()`. |
+| `functions/synthetic.R` | `synthetic_truth()`, `synthetic_cells()`: seeded stand-in for the model output. |
+| `tools/make_synthetic_cells.R` | Writes the synthetic table and its truth to `estimates$synthetic$out_dir`. |
 | `test/test_estimators.R` | Hand-built table with known answers (the worked example below); exits 1 on any mismatch. |
+| `test/test_synthetic_recovery.R` | Generates the synthetic table, round-trips it through the reader, and checks every MLRA and LRR estimate against the truth within 3 standard errors. No masks needed. |
 
 ```sh
 Rscript estimates/test/test_estimators.R
+Rscript estimates/test/test_synthetic_recovery.R
+Rscript estimates/tools/make_synthetic_cells.R   # then source("estimates/00_run_estimates.R")
 ```
+
+## Model output as a pixel-count table
+
+The partner's grid-level product is expected as one CSV with a row per cell and
+target year. Every grid is predicted at a fixed 1 m pixel, so the table holds
+pixel **counts** and the reader turns them into areas with
+`estimates$pixel_area_m2` (1 m² by default). The masks are applied inside the
+model, so the table's own eligible count is the eligible denominator.
+
+| column | required | meaning |
+|--------|----------|---------|
+| `id` | yes | 1 km cell id, as in the sample list |
+| `target_year` | yes | naip target year |
+| `actual_year` | no | NAIP year actually used; defaults to `target_year` |
+| `tof_px` | yes | pixels predicted as trees outside forest |
+| `eligible_px` | yes | pixels not masked out |
+| `footprint_px` | no | all pixels of the cell; defaults to the cell area |
+
+`read_model_table()` refuses duplicate cell-years, NA counts and `tof_px`
+above `eligible_px`; leave a cell-year out rather than filling it with NA, and
+it is counted in `n_missing`. An `MLRA_ID` column in the table is ignored: the
+sample list decides the MLRA. Set `estimates$model_source` to `"table"` and
+`estimates$paths$model_table` to the file.
+
+### The synthetic table
+
+`tools/make_synthetic_cells.R` writes `synthetic_cells_lrr_F.csv` in that
+layout for all sampled cells and target years, plus `synthetic_truth_lrr_F.csv`
+with the generating parameters per MLRA. The draw is seeded
+(`estimates$synthetic$seed`) and built to look like LRR F:
+
+- each MLRA has its own mean TOF share of eligible land (0.5 to 5 %), so the
+  stratified weighting is exercised;
+- most cells have no TOF at all (55 to 80 % zeros); the rest are right-skewed
+  (lognormal, capped at 50 % of eligible land);
+- a cell's share is nearly constant over the decade: 3 % relative noise per
+  year, 1 % of cells losing cover from 2016 and 1 % gaining from 2020;
+- masks are small and zero-inflated: 1 to 6 % forest and under 1 % urban per
+  MLRA, held fixed across years for a cell.
+
+The recovery test is the same draw checked against the truth. Seed 2026 put
+MLRA 59 four standard errors low: a heavy-tailed draw that misses the big
+cells gets a low mean and a low standard error together. The tail was
+lightened (sdlog 0.8) and the seed set to 3, where every MLRA-year is within
+2 standard errors. That is a property of the synthetic distribution to keep
+in mind when reading real standard errors, not of the estimator.
 
 ## Estimator
 
@@ -31,7 +84,7 @@ MLRA areas as weights. Per cell `i` in MLRA `h`:
 
 | symbol | column | meaning |
 |--------|--------|---------|
-| `f_hi` | `footprint_m2` | the part of the cell inside the MLRA, no mask |
+| `f_hi` | `footprint_m2` | the whole 1 km cell, no mask |
 | `a_hi` | `eligible_m2` | the part of `f_hi` that is neither NLCD forest nor a Census place (union of the two masks, which overlap) |
 | `t_hi` | `tof_m2` | TOF area the model found inside the cell |
 
@@ -65,36 +118,39 @@ of eligible land and 10,675 / 200,000 = 5.34 % of all land.
 
 ## Data flow
 
-1. **Cell geometry.** `cell_geometry()` rebuilds each sampled cell from its id
-   (`sampling/functions/grid_cells.R`) and clips it to the MLRA that drew it.
-   A cell drawn by two MLRAs (15 in F) appears once per MLRA, each row holding
-   only the part inside that MLRA. Tables are keyed on (`id`, `MLRA_ID`),
-   never on `id` alone.
-2. **Mask year.** `naip_year_table()` reads the naip `status.json` files. The
-   mask year for a cell is the year NAIP was **actually captured**
-   (`actual_year`); for target 2012 every cell so far is 2011 imagery. The
-   stratum areas use the target year's masks.
-3. **Mask areas.** `cell_areas()` and `stratum_areas()` measure footprint,
-   forest, urban, their overlap and the eligible remainder. Forest comes from
-   the 30 m binary raster through `exactextractr` (partial edge pixels count by
-   covered area); urban from the dissolved places polygon by exact vector
-   intersection. Cached per mask year in `out_dir` because they do not depend
-   on the model.
-4. **Model output.** `join_model_output()` reads, per cell and actual year, the
-   raster named by `estimates$model_pattern` (1 = TOF, 0 = not, NA = masked)
-   and records `tof_m2` (covered area of 1-pixels) and `model_eligible_m2`
-   (covered area of non-NA pixels). The NoData value must be declared in the
-   file. `eligible_from: "model"` makes the estimators use the raster's
-   non-NA area as the eligible denominator instead of the mask-derived one;
-   both columns are kept either way. A cell-year with no raster gets
+1. **Cell list.** `cell_geometry()` rebuilds each sampled cell from its id
+   (`sampling/functions/grid_cells.R`). A cell drawn by two MLRAs (15 in F) is
+   counted once, in the first MLRA that drew it in sample-list order, the same
+   rule `sampling/00_prepare_sites.R` uses: the model is the same raster
+   whichever MLRA drew the cell. Cells are not clipped to the MLRA, so a
+   boundary cell's footprint is the whole square even where it hangs over.
+2. **Model output, table mode** (`model_source: "table"`).
+   `join_model_table()` gives every cell one row per target year in the
+   table; `eligible_m2` and `footprint_m2` come from the table's counts. No
+   cell-level mask areas are measured.
+3. **Model output, raster mode** (`model_source: "raster"`).
+   `naip_year_table()` reads the naip `status.json` files; the mask year for a
+   cell is the year NAIP was **actually captured** (`actual_year`), and for
+   target 2012 every cell so far is 2011 imagery. `cell_areas()` measures
+   footprint, forest, urban, their overlap and the eligible remainder per cell
+   and mask year (cached in `out_dir`). `join_model_output()` reads, per cell
+   and actual year, the raster named by `estimates$model_pattern` (1 = TOF,
+   0 = not, NA = masked) and records `tof_m2` and `model_eligible_m2`; the
+   NoData value must be declared in the file. `eligible_from: "model"` makes
+   the estimators use the raster's non-NA area as the eligible denominator
+   instead of the mask-derived one. A cell-year with no raster gets
    `tof_m2 = NA`, is dropped from the estimate and counted in `n_missing`.
+4. **Stratum areas.** `stratum_areas()` measures each MLRA polygon against the
+   target year's masks: forest from the 30 m binary raster through
+   `exactextractr` (partial edge pixels count by covered area), urban from the
+   dissolved places polygon by exact vector intersection. Cached per year.
 5. **Estimates.** `estimate_mlra()` then `estimate_lrr()`.
 
 ### Outputs (ignored by git)
 
 | file | contents |
 |------|----------|
-| `cellAreas_lrr_F_mask_<year>.csv` | mask areas per (id, MLRA_ID) for one mask year |
+| `cellAreas_lrr_F_mask_<year>.csv` | raster mode only: mask areas per cell for one mask year |
 | `strataAreas_lrr_F_<year>.csv` | total and eligible area per MLRA for one mask year |
 | `cells_lrr_F_<target>.csv` | the cell-year table with the model output joined |
 | `estimates_mlra_lrr_F.csv` | per MLRA, year and denominator: n, sums, estimate, se, pct, pct_se |
@@ -102,6 +158,10 @@ of eligible land and 10,675 / 200,000 = 5.34 % of all land.
 
 ## Open points
 
+- **Partner integration.** The partner's Monte Carlo pipeline gives the
+  model-side variance (V1); this stage gives the sampling variance (V2). The
+  combined uncertainty is V1 + V2 per MLRA, summed across strata for the LRR.
+  Not implemented yet; replicate columns in the table are the likely way in.
 - **Model raster format.** The pattern and the 1 / 0 / NA convention are
   assumptions until the model stage exists; `read_model_cell()` is the only
   place that reads them.

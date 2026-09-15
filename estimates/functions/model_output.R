@@ -67,3 +67,73 @@ join_model_output <- function(cells, model_dir, pattern, eligible_from = c("mask
   if (any(!have)) message(sprintf("%d of %d cell-years have no model raster (tof_m2 = NA).", sum(!have), nrow(cells)))
   tibble::as_tibble(out)
 }
+
+# Model output as a table of pixel counts ---------------------------------------
+# The alternative to per-cell rasters: one CSV with, per cell and target year,
+# the number of pixels the model called trees outside forest and the number of
+# pixels it was allowed to call (not masked). Every grid is predicted at a fixed
+# pixel size (1 m), so counts are areas once multiplied by `pixel_area_m2`.
+# This is the layout the project partner's grid-level output is expected in.
+#
+#   column        required  meaning
+#   id            yes       1 km cell id (as in the sample list)
+#   target_year   yes       naip target year
+#   actual_year   no        NAIP year actually used; defaults to target_year
+#   tof_px        yes       pixels predicted as trees outside forest
+#   eligible_px   yes       pixels not masked out (the model's eligible area)
+#   footprint_px  no        all pixels of the cell; defaults to the cell area
+# Other columns are carried through. MLRA_ID, if present, is ignored: the sample
+# list decides which MLRA a cell belongs to.
+
+#' Read and validate a pixel-count table, converting counts to m².
+#'
+#' @return tibble with id, target_year, actual_year, tof_m2, eligible_m2 and,
+#'         when footprint_px is present, footprint_m2; the *_px columns are kept.
+read_model_table <- function(path, pixel_area_m2 = 1) {
+  tab <- readr::read_csv(path, show_col_types = FALSE,
+                         col_types = readr::cols(id = readr::col_character(), .default = readr::col_guess()))
+  needed <- c("id", "target_year", "tof_px", "eligible_px")
+  miss <- setdiff(needed, names(tab))
+  if (length(miss)) stop("Model table ", path, " is missing: ", paste(miss, collapse = ", "))
+  if (!"actual_year" %in% names(tab)) tab$actual_year <- tab$target_year
+  tab <- dplyr::mutate(tab, target_year = as.integer(target_year), actual_year = as.integer(actual_year))
+  dup <- tab |> dplyr::count(id, target_year) |> dplyr::filter(n > 1)
+  if (nrow(dup)) stop(nrow(dup), " duplicate (id, target_year) rows in ", path)
+  bad <- is.na(tab$tof_px) | is.na(tab$eligible_px)
+  if (any(bad)) stop(sum(bad), " rows with NA tof_px or eligible_px in ", path, "; leave the row out instead.")
+  if (any(tab$tof_px > tab$eligible_px)) stop("tof_px exceeds eligible_px in ", sum(tab$tof_px > tab$eligible_px), " rows.")
+  if ("footprint_px" %in% names(tab) && any(tab$eligible_px > tab$footprint_px, na.rm = TRUE)) {
+    stop("eligible_px exceeds footprint_px in ", sum(tab$eligible_px > tab$footprint_px, na.rm = TRUE), " rows.")
+  }
+  tab$tof_m2      <- tab$tof_px * pixel_area_m2
+  tab$eligible_m2 <- tab$eligible_px * pixel_area_m2
+  if ("footprint_px" %in% names(tab)) tab$footprint_m2 <- tab$footprint_px * pixel_area_m2
+  tibble::as_tibble(tab)
+}
+
+#' Cell-year table from the sampled cells and a pixel-count table.
+#'
+#' Every sampled cell gets one row per target year in `tab`; a cell-year the
+#' table does not cover gets tof_m2 = NA (dropped by the estimators and counted
+#' in n_missing). Rows of `tab` for ids outside the sample list are dropped
+#' with a message. Where the table has no footprint, the cell area is used.
+#'
+#' @param cells output of cell_geometry() (sf or data frame with id, MLRA_ID, cell_m2).
+#' @param tab   output of read_model_table().
+join_model_table <- function(cells, tab) {
+  cells <- tibble::as_tibble(sf::st_drop_geometry(cells))[, c("id", "MLRA_ID", "cell_m2")]
+  extra <- setdiff(unique(tab$id), cells$id)
+  if (length(extra)) {
+    message(sprintf("%d ids in the model table are not sampled cells; dropped.", length(extra)))
+    tab <- dplyr::filter(tab, !id %in% extra)
+  }
+  clash <- setdiff(intersect(names(tab), names(cells)), "id")   # MLRA_ID, cell_m2: the sample list wins
+  if (length(clash)) tab <- tab[, setdiff(names(tab), clash)]
+  frame <- tidyr::expand_grid(cells, target_year = sort(unique(tab$target_year)))
+  out <- dplyr::left_join(frame, tab, by = c("id", "target_year"))
+  if (!"footprint_m2" %in% names(out)) out$footprint_m2 <- out$cell_m2
+  out$footprint_m2 <- dplyr::coalesce(out$footprint_m2, out$cell_m2)
+  n_na <- sum(is.na(out$tof_m2))
+  if (n_na) message(sprintf("%d of %d cell-years are not in the model table (tof_m2 = NA).", n_na, nrow(out)))
+  out
+}

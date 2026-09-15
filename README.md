@@ -8,6 +8,7 @@ Pipeline for estimating trees outside forests (TOF) by USDA Land Resource Region
 | `masks/`  | Annual forest and urban masks per LRR (NLCD, Census) | agroforestry_Masks |
 | `naip/`   | NAIP acquisition and SNIC segmentation over AOIs     | naipScrape         |
 | `sampling/` | Systematic sample grid draw, sample design maps and site-role assignment | new; grid draw ported from neymanSampling; agroforestrySampling to follow |
+| `estimates/` | Area-weighted TOF estimates per MLRA and LRR from the per-cell model output | new |
 
 Each stage keeps its own README. This file covers what is shared.
 
@@ -50,6 +51,8 @@ source("naip/src/run_pipeline.R")   # pull and process NAIP for the sampled grid
 source("sampling/00_draw_sample_grid.R")  # redraw the systematic sample grid (about 1400 cells per MLRA)
 source("sampling/01_map_lrr_sites.R")  # whole-LRR sample design map and site-role assignment
 source("sampling/02_map_mlra_sites.R") # one map pair per MLRA, layers clipped to each MLRA
+source("estimates/tools/make_synthetic_cells.R")  # synthetic model output while none exists
+source("estimates/00_run_estimates.R")  # area-weighted TOF estimates per MLRA and LRR
 ```
 
 The tracked sample lists in `data/reference/sampleGrids/` are the May 2026

@@ -84,38 +84,26 @@ polygons_only <- function(geom) {
   geom
 }
 
-#' The sampled 1 km cells, each clipped to the MLRA that drew it.
+#' The sampled 1 km cells, one row per cell.
 #'
-#' A cell drawn by two MLRAs appears twice, once per MLRA, each row holding only
-#' the part inside that MLRA. A cell whose overlap with its MLRA is empty gets
-#' an empty geometry so it still counts as a sampled cell (footprint 0).
+#' A cell drawn by two MLRAs (15 in F) is counted once, in the first MLRA that
+#' drew it in sample-list order, the same rule sampling/00_prepare_sites.R uses.
+#' The model is the same raster whichever MLRA drew the cell, so the cell is not
+#' split or clipped: its footprint is the whole 1 km square even where it hangs
+#' over the MLRA boundary (the sampling frame is a blocky outline of the MLRA).
 #'
-#' @param sample_tbl data frame with id and MLRA_ID (duplicates on both are dropped).
+#' @param sample_tbl data frame with id and MLRA_ID.
 #' @param g100       the 100 km reference grid (sf).
-#' @param mlra       MLRA polygons (sf) with MLRA_ID, already in `crs`.
-#' @return sf keyed on (id, MLRA_ID) with cell_m2 (the uncut cell) and geometry.
-cell_geometry <- function(sample_tbl, g100, mlra, crs = "EPSG:5070") {
-  key   <- dplyr::distinct(sample_tbl, id, MLRA_ID)
-  cells <- cells_from_ids(unique(key$id), g100) |> sf::st_transform(crs)
+#' @return sf keyed on id with MLRA_ID, cell_m2 and the cell geometry.
+cell_geometry <- function(sample_tbl, g100, crs = "EPSG:5070") {
+  key   <- dplyr::distinct(sample_tbl, id, .keep_all = TRUE)[, c("id", "MLRA_ID")]
+  cells <- cells_from_ids(key$id, g100) |> sf::st_transform(crs)
   cells$cell_m2 <- as.numeric(sf::st_area(cells))
   cells <- dplyr::inner_join(cells, key, by = "id")
-  out <- lapply(split(cells, cells$MLRA_ID), function(cc) {
-    poly <- sf::st_geometry(mlra)[match(cc$MLRA_ID[1], mlra$MLRA_ID)]
-    if (length(poly) == 0 || sf::st_is_empty(poly)) stop("MLRA ", cc$MLRA_ID[1], " not in the MLRA layer.")
-    g <- suppressWarnings(sf::st_intersection(sf::st_geometry(cc), poly))
-    # st_intersection drops rows with an empty result; rebuild a full-length sfc.
-    full <- rep(sf::st_sfc(sf::st_polygon(), crs = crs), nrow(cc))
-    idx  <- attr(g, "idx")
-    if (is.null(idx)) idx <- cbind(seq_len(nrow(cc)), 1L)  # older sf: no drops happened
-    full[idx[, 1]] <- polygons_only(g)
-    sf::st_set_geometry(cc, full)
-  })
-  out <- do.call(rbind, out)
-  rownames(out) <- NULL
-  out[, c("id", "MLRA_ID", "cell_m2", attr(out, "sf_column"))]
+  cells[, c("id", "MLRA_ID", "cell_m2", attr(cells, "sf_column"))]
 }
 
-#' Mask areas of every sampled cell (already clipped by cell_geometry()).
+#' Mask areas of every sampled cell (from cell_geometry()).
 cell_areas <- function(cells, layers) polygon_mask_areas(cells, layers)
 
 #' Mask areas of every MLRA polygon: the stratum totals A_h and E_h.

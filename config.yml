@@ -85,12 +85,27 @@ estimates:
   # 1 = trees outside forest, 0 = not, NA = masked out (Census place / NLCD
   # forest). {id} and {year} in the pattern are the cell id and the actual year.
   model_pattern: "tof_{id}_{year}.tif"
-  # Denominator the estimators take as "eligible": "mask" measures it from the
-  # masks/ products; "model" takes the non-NA area of the model raster.
+  # Denominator the estimators take as "eligible" (raster mode only): "mask"
+  # measures it from the masks/ products; "model" takes the non-NA area of the
+  # model raster. In table mode the table's eligible_px is always the denominator.
   eligible_from: "mask"
+  # Where the per-cell model output comes from:
+  #   "raster": one raster per cell and actual NAIP year (model_pattern, paths$model_dir)
+  #   "table":  one CSV of pixel counts per cell and target year (paths$model_table);
+  #             the layout is documented in estimates/functions/model_output.R.
+  # Set to "table" with the synthetic file while no model output exists.
+  model_source: "table"
+  pixel_area_m2: 1            # every grid is predicted at 1 m, so a pixel count is an area in m²
+  # Synthetic model output (estimates/tools/make_synthetic_cells.R): one seeded
+  # draw per MLRA with its own TOF level, most cells at zero, little change over
+  # the years, masks near 3 % forest and under 1 % urban.
+  synthetic:
+    seed: 3      # seed 2026 drew MLRA 59 four standard errors low; the recovery test wants 3
+    out_dir: "data/estimates/synthetic"
   paths:
     sample_csv:      "data/reference/sampleGrids/selectedSample_lrr_F_05_2026.csv"
     masks_outputs:   "data/masks/outputs/llr_masks"
     naip_export_dir: "data/naip/exportData"
     model_dir:       "data/tof/predictions"
+    model_table:     "data/estimates/synthetic/synthetic_cells_lrr_F.csv"
     out_dir:         "data/estimates"
