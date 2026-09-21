@@ -7,6 +7,8 @@
 #   forest  <- NLCD classes 41/42/43, as 0 = not forest, 1 = forest
 #   urban   <- US Census places (NOT an NLCD class), to stay consistent with the
 #              other teams' carbon-storage metrics for forest and urban areas
+#   mask    <- the union of the two (they overlap), dissolved: the single mask
+#              layer downstream stages take as "the masked area"
 #
 # A mask is only built for a year that has its own independent source layer. The
 # Census does not serve every year; those years get forest products and no urban
@@ -413,6 +415,134 @@ build_llr_urban <- function(year, study, out_dir = llr_out_dir,
        census_source_year = src_year, census_boundary_type = boundary_type)
 }
 
+#' Combine One Year's Forest and Urban Masks into a Single Mask
+#'
+#' The forest and urban masks come from different definitions and overlap (a
+#' wooded park inside a city is in both), so anything that needs "the masked
+#' area" has to union them. This writes that union once, as the primary mask
+#' product for the years downstream, in the same two forms as the forest mask:
+#'
+#'   - GeoPackage: one dissolved multipolygon, the exact union of the forest
+#'     polygons and the dissolved places. The urban side keeps its vector
+#'     precision, so this is the authoritative product.
+#'   - GeoTIFF on the NLCD grid: 1 = forest or place, 0 = neither, for pixel
+#'     work and maps. The places are rasterised at 30 m (a pixel is in when its
+#'     centre is), so its area differs slightly from the polygon's.
+#'
+#' A year without an urban product gets a mask that is the forest alone, and
+#' the layer's attributes say so (n_places NA, census fields NA).
+#'
+#' The mask is rebuilt whenever it is older than either input, so a rebuilt
+#' urban layer cannot leave a stale union behind.
+#'
+#' @param year Integer year.
+#' @param forest_gpkg Path to the year's forest polygons.
+#' @param forest_tif Path to the year's forest raster.
+#' @param urban_gpkg Path to the year's dissolved urban mask, or NULL.
+#' @param out_dir Output directory.
+#' @param crs CRS to write the polygons in.
+#' @param overwrite Rebuild even if the outputs exist and are current.
+#' @return Named list: polygons, raster, forest_m2, urban_m2, overlap_m2,
+#'   mask_m2, mask_pct; or NULL when there is no forest product.
+build_llr_mask <- function(year, forest_gpkg, forest_tif, urban_gpkg = NULL,
+                           out_dir = llr_out_dir, crs = llr_polygon_crs,
+                           overwrite = FALSE) {
+  if (is.null(forest_gpkg) || is.null(forest_tif)) return(NULL)
+  poly_dest <- file.path(out_dir, sprintf("llr_%s_mask_%d.gpkg", llr_id, year))
+  tif_dest  <- file.path(out_dir, sprintf("llr_%s_mask_%d.tif",  llr_id, year))
+
+  inputs  <- c(forest_gpkg, forest_tif, urban_gpkg)
+  current <- file.exists(poly_dest) && file.exists(tif_dest) &&
+    all(file.mtime(poly_dest) >= file.mtime(inputs)) &&
+    all(file.mtime(tif_dest)  >= file.mtime(inputs))
+  if (current && !overwrite) {
+    message(sprintf("  %d combined mask exists - skipping.", year))
+    existing <- sf::st_drop_geometry(sf::st_read(poly_dest, quiet = TRUE))
+    return(list(polygons = poly_dest, raster = tif_dest,
+                forest_m2 = existing$forest_m2[1], urban_m2 = existing$urban_m2[1],
+                overlap_m2 = existing$overlap_m2[1], mask_m2 = existing$mask_m2[1],
+                mask_pct = existing$mask_pct[1]))
+  }
+  if (file.exists(poly_dest) && !current) {
+    message(sprintf("  %d combined mask is older than its inputs - rebuilding.", year))
+  }
+
+  forest <- sf::st_read(forest_gpkg, quiet = TRUE) |> sf::st_transform(crs)
+  urban  <- if (!is.null(urban_gpkg) && file.exists(urban_gpkg)) {
+    u <- sf::st_read(urban_gpkg, quiet = TRUE)
+    if (nrow(u) > 0) sf::st_transform(u, crs) else NULL
+  } else NULL
+
+  forest_geom <- sf::st_union(sf::st_geometry(forest))
+  forest_m2   <- as.numeric(sf::st_area(forest_geom))
+  if (!is.null(urban)) {
+    message(sprintf("  %d combined mask: union of forest and urban polygons...", year))
+    urban_geom <- sf::st_union(sf::st_geometry(urban))
+    mask_geom  <- sf::st_union(forest_geom, urban_geom)
+    urban_m2   <- as.numeric(sf::st_area(urban_geom))
+  } else {
+    message(sprintf("  %d combined mask: no urban product, mask is the forest alone.", year))
+    mask_geom <- forest_geom
+    urban_m2  <- 0
+  }
+  mask_geom <- sf::st_cast(mask_geom, "MULTIPOLYGON")
+  mask_m2   <- as.numeric(sf::st_area(mask_geom))
+  # The masks are not exclusive: the overlap is what the sum over-counts.
+  overlap_m2 <- forest_m2 + urban_m2 - mask_m2
+
+  one <- function(x, default) if (is.null(x) || length(x) == 0 || all(is.na(x))) default else x[[1]]
+  mask <- sf::st_sf(
+    mask       = 1L,
+    year       = as.integer(year),
+    lrr        = llr_id,
+    forest_source = one(forest$source, sprintf("Annual NLCD Land Cover %d", year)),
+    nlcd_classes  = one(forest$nlcd_classes, paste(llr_forest_classes, collapse = ",")),
+    urban_source  = if (is.null(urban)) NA_character_ else sprintf("US Census places %d", year),
+    n_places             = if (is.null(urban)) NA_integer_ else one(urban$n_places, NA_integer_),
+    census_source_year   = if (is.null(urban)) NA_integer_ else one(urban$census_source_year, NA_integer_),
+    census_boundary_type = if (is.null(urban)) NA_character_ else one(urban$census_boundary_type, NA_character_),
+    forest_m2  = forest_m2,
+    urban_m2   = urban_m2,
+    overlap_m2 = overlap_m2,
+    mask_m2    = mask_m2,
+    mask_pct   = NA_real_,          # filled from the raster below
+    geometry   = mask_geom
+  )
+
+  # Raster: the forest binary OR the places burnt onto the same grid.
+  r <- terra::rast(forest_tif)
+  m <- if (!is.null(urban)) {
+    u_v <- terra::project(terra::vect(urban), terra::crs(r))
+    u_r <- terra::rasterize(u_v, r, field = 1, background = 0)
+    terra::mask(max(r, u_r), r)
+  } else r
+  names(m) <- "mask"
+  mask$mask_pct <- round(100 * terra::global(m, "mean", na.rm = TRUE)[[1]], 3)
+  terra::metags(m) <- c(
+    mask_type    = "forest_or_urban",
+    year         = as.character(year),
+    lrr          = llr_id,
+    source       = paste(c(mask$forest_source, mask$urban_source[!is.na(mask$urban_source)]), collapse = "; "),
+    nlcd_classes = mask$nlcd_classes,
+    # No "=" inside a tag value and no tag called "values": terra 1.9 drops the
+    # whole tag set silently on either (the forest raster's tags predate that).
+    legend       = "0 neither forest nor place, 1 forest or place, 255 outside study area",
+    study_area   = sprintf("LRR %s buffered by %dm", llr_id, llr_buffer_m),
+    note         = "Places rasterised at 30 m; the GeoPackage of the same name is the exact union"
+  )
+  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+  terra::writeRaster(
+    m, tif_dest, overwrite = TRUE,
+    datatype = "INT1U", NAflag = 255,
+    gdal = c("TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER")
+  )
+  sf::st_write(mask, poly_dest, delete_dsn = TRUE, quiet = TRUE)
+
+  list(polygons = poly_dest, raster = tif_dest,
+       forest_m2 = forest_m2, urban_m2 = urban_m2, overlap_m2 = overlap_m2,
+       mask_m2 = mask_m2, mask_pct = mask$mask_pct)
+}
+
 #' Build Every LLR-Scale Product for One Year
 #'
 #' @param year Integer year.
@@ -420,7 +550,8 @@ build_llr_urban <- function(year, study, out_dir = llr_out_dir,
 #' @param overwrite Rebuild existing outputs, rasters included.
 #' @param overwrite_vectors Rebuild only the GeoPackage products, which is what
 #'   a change to the vector schema needs - the rasters are unaffected and
-#'   re-cropping them is the expensive half of a run.
+#'   re-cropping them is the expensive half of a run. The combined mask (both
+#'   forms) is rebuilt too, since it is derived from the vectors.
 #' @return One-row data.frame summarising what was written.
 build_llr_year <- function(year, study, overwrite = FALSE,
                            overwrite_vectors = llr_overwrite_vectors) {
@@ -432,6 +563,9 @@ build_llr_year <- function(year, study, overwrite = FALSE,
     build_llr_forest_polygons(tif, year, overwrite = vectors)
   } else NULL
   urb <- build_llr_urban(year, study, overwrite = vectors)
+  msk <- build_llr_mask(year, forest_gpkg = gpkg, forest_tif = tif,
+                        urban_gpkg = if (is.null(urb)) NULL else urb$urban,
+                        overwrite = vectors)
 
   forest_pct <- if (!is.null(tif)) {
     r <- terra::rast(tif)
@@ -466,6 +600,13 @@ build_llr_year <- function(year, study, overwrite = FALSE,
     census_source_year = one(urb$census_source_year, NA_integer_),
     census_boundary_type = one(urb$census_boundary_type, NA_character_),
     census_status      = census_status,
+    mask_polygons      = one(if (is.null(msk)) NULL else basename(msk$polygons), NA_character_),
+    mask_raster        = one(if (is.null(msk)) NULL else basename(msk$raster), NA_character_),
+    mask_pct           = one(msk$mask_pct, NA_real_),
+    forest_km2         = round(one(msk$forest_m2, NA_real_) / 1e6, 2),
+    urban_km2          = round(one(msk$urban_m2, NA_real_) / 1e6, 2),
+    overlap_km2        = round(one(msk$overlap_m2, NA_real_) / 1e6, 2),
+    mask_km2           = round(one(msk$mask_m2, NA_real_) / 1e6, 2),
     stringsAsFactors   = FALSE
   )
 }

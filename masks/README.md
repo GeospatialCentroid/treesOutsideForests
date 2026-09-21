@@ -25,6 +25,17 @@ Everything lands in `data/masks/outputs/llr_masks/`, one set per year:
 | `llr_F_forest_<year>.gpkg` | the same mask as polygons, EPSG:5070 |
 | `llr_F_places_<year>.gpkg` | Census places clipped to the study area, attributes intact |
 | `llr_F_urban_<year>.gpkg` | those places dissolved into a single urban mask |
+| `llr_F_mask_<year>.gpkg` | **the combined mask**: forest and urban unioned and dissolved into one multipolygon, EPSG:5070 |
+| `llr_F_mask_<year>.tif` | the combined mask on the NLCD grid, `0` = neither, `1` = forest or place, NoData 255 |
+
+The combined mask is the layer downstream stages take as "the masked area".
+Forest and urban overlap (see below), so their union is smaller than their sum;
+the polygon carries all four areas. The GeoPackage is the exact union and the
+authoritative product; the raster burns the places onto the 30 m grid (a pixel
+is in when its centre is), so its area differs slightly from the polygon's. It
+is rebuilt whenever it is older than the forest or urban layer it came from.
+A year without an urban product would get a combined mask equal to the forest
+alone, with the Census fields NA; none of 2009–2021 is in that position.
 
 Every layer is self-describing, so a file that reaches someone without this
 README or the summary CSV still says what it is:
@@ -35,6 +46,8 @@ README or the summary CSV still says what it is:
 | forest raster | the same, as GeoTIFF metadata tags (`gdalinfo` shows them) |
 | places | the Census fields, plus `census_source_year`, `census_boundary_type`, `census_requested_year`, `area_retained` |
 | urban | `urban` (always 1), `year`, `lrr`, `n_places`, `census_source_year`, `census_boundary_type` |
+| mask polygons | `mask` (always 1), `year`, `lrr`, `forest_source`, `nlcd_classes`, `urban_source`, `n_places`, `census_source_year`, `census_boundary_type`, `forest_m2`, `urban_m2`, `overlap_m2`, `mask_m2`, `mask_pct` |
+| mask raster | `mask_type`, `year`, `lrr`, `source`, `nlcd_classes`, `legend`, `study_area`, `note`, as GeoTIFF metadata tags |
 
 `area_retained` is the fraction of the place's own uncut geometry that survived
 the clip, so `1` means the boundary did not touch it. `ALAND` and `AWATER`
@@ -64,9 +77,11 @@ none of 2009–2021 is in that position.
 
 Plus `llr_F_study_area.gpkg` (the exact clip boundary) and
 `llr_mask_summary.csv`, which is the manifest for the delivery: per-year forest
-percentage, which files were written, place count, and Census provenance
+percentage, which files were written, place count, Census provenance
 (`census_source_year`, `census_boundary_type`, and a plain-language
-`census_status`).
+`census_status`), and the combined mask's share of the study area (`mask_pct`,
+from the raster) with the forest, urban, overlap and union areas in km²
+(from the polygons).
 
 The **rasters stay on the native NLCD grid** and the **polygons are written in
 EPSG:5070**. Reprojecting a categorical raster resamples it for no gain, whereas
@@ -144,8 +159,9 @@ Rscript -e 'llr_overwrite_vectors <- TRUE; source("masks/src/02_llr_masks.R")'
 ```
 
 Step 2 downloads ~1.3 GB per NLCD year on first run and is skipped thereafter.
-Step 3 takes roughly two minutes per year, most of it polygonising a
-1.1-billion-cell raster.
+Step 3 takes roughly five minutes per year: about two polygonising a
+1.1-billion-cell raster and about three building the combined mask (the
+vector union is the bulk of it).
 
 ## Source data, year by year
 

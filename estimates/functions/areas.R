@@ -111,3 +111,76 @@ stratum_areas <- function(mlra, layers) {
   polygon_mask_areas(mlra[, c("MLRA_ID", "MLRARSYM", "MLRA_NAME")], layers) |>
     dplyr::rename(total_m2 = footprint_m2)
 }
+
+# Against the combined mask (masks/ product llr_<LRR>_mask_<year>.gpkg) -----------
+# The masks stage writes the union of forest and urban as one dissolved
+# multipolygon per year. Measuring against it directly gives the masked area
+# without the forest + urban - overlap bookkeeping above, and the number is
+# exactly the area of the delivered mask inside the polygon.
+
+#' Load one year's combined mask, split into its patches for fast intersection.
+#'
+#' @return sf of POLYGON parts with the mask attributes repeated; attribute
+#'         `year` is the mask year.
+combined_mask <- function(masks_dir, llr_id, year, crs = "EPSG:5070") {
+  path <- file.path(masks_dir, sprintf("llr_%s_mask_%d.gpkg", llr_id, as.integer(year)))
+  if (!file.exists(path)) stop("No combined mask for ", llr_id, " ", year, ": ", path, " (run masks/src/02_llr_masks.R)")
+  m <- sf::st_read(path, quiet = TRUE) |> sf::st_transform(crs)
+  suppressWarnings(sf::st_cast(m, "POLYGON"))
+}
+
+#' Area of the combined mask inside each polygon, in m².
+#'
+#' Exact vector intersection against the mask patches; sf builds a spatial
+#' index over the patches, so this is a few seconds per thousand polygons.
+mask_area_m2 <- function(polys, mask_parts) {
+  n <- nrow(polys)
+  if (n == 0) return(numeric(0))
+  x <- sf::st_sf(.row = seq_len(n), geometry = sf::st_geometry(polys))
+  pieces <- suppressWarnings(sf::st_intersection(x, sf::st_geometry(mask_parts)))
+  if (nrow(pieces) == 0) return(numeric(n))
+  sf::st_geometry(pieces) <- polygons_only(sf::st_geometry(pieces))
+  a <- as.numeric(sf::st_area(pieces))
+  out <- numeric(n)
+  s <- tapply(a, pieces$.row, sum)
+  out[as.integer(names(s))] <- as.numeric(s)
+  out
+}
+
+#' The sampled cells clipped to the MLRA that drew them.
+#'
+#' One feature per (id, MLRA_ID) pair in the sample list. A cell drawn by two
+#' MLRAs becomes two features, one per MLRA, each holding the part of the cell
+#' inside that MLRA; the MLRA polygons do not overlap, so the pieces do not
+#' either and every square metre of the sample is counted once. A pair whose
+#' intersection is empty is dropped with a message.
+#'
+#' @param sample_tbl data frame with id and MLRA_ID.
+#' @param mlra       sf of the LRR's MLRA polygons with MLRA_ID, in `crs`.
+#' @param g100       the 100 km reference grid (sf).
+#' @return sf keyed on (id, MLRA_ID): cell_m2 (the whole 1 km cell), aoi_m2
+#'         (the clipped piece) and the clipped geometry.
+clip_cells_to_mlra <- function(sample_tbl, mlra, g100, crs = "EPSG:5070") {
+  key   <- dplyr::distinct(sample_tbl, id, MLRA_ID)
+  cells <- cells_from_ids(unique(key$id), g100) |> sf::st_transform(crs)
+  geom  <- sf::st_geometry(cells)[match(key$id, cells$id)]
+  out <- purrr::map_dfr(split(seq_len(nrow(key)), key$MLRA_ID), function(idx) {
+    h <- key$MLRA_ID[idx[1]]
+    poly <- sf::st_geometry(mlra)[mlra$MLRA_ID == h]
+    if (length(poly) != 1) stop("MLRA ", h, " is not in the MLRA layer exactly once.")
+    clipped <- suppressWarnings(sf::st_intersection(geom[idx], poly))
+    # st_intersection drops empty results; st_intersects says which rows survive
+    keep <- which(lengths(sf::st_intersects(geom[idx], poly)) > 0)
+    if (length(clipped) != length(keep)) stop("Clipped pieces do not line up with the intersecting cells for MLRA ", h)
+    clipped <- polygons_only(clipped)
+    sf::st_sf(id = key$id[idx][keep], MLRA_ID = h,
+              cell_m2 = as.numeric(sf::st_area(geom[idx][keep])),
+              geometry = clipped)
+  })
+  out <- out[!sf::st_is_empty(out), ]
+  out$aoi_m2 <- as.numeric(sf::st_area(out))
+  out <- out[out$aoi_m2 > 0, ]
+  dropped <- nrow(key) - nrow(out)
+  if (dropped > 0) message(sprintf("%d of %d (id, MLRA) pairs have no area inside their MLRA; dropped.", dropped, nrow(key)))
+  out[, c("id", "MLRA_ID", "cell_m2", "aoi_m2", attr(out, "sf_column"))]
+}

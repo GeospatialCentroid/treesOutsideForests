@@ -102,9 +102,38 @@ estimates:
   synthetic:
     seed: 3      # seed 2026 drew MLRA 59 four standard errors low; the recovery test wants 3
     out_dir: "data/estimates/synthetic"
+  # Placeholder TOF per clipped AOI for partners (estimates/02_placeholder_tof.R):
+  # calibrated so every MLRA-year's area-weighted TOF share equals the MLRA's
+  # NLCD forest share; zero-inflated with a long right tail across AOIs.
+  placeholder:
+    seed: 7
+    p_zero: 0.65     # share of AOIs with no TOF in any year
+    sdlog: 1.0       # lognormal spread of the rest (larger = longer tail)
+    cap: 0.5         # no AOI above this share of its eligible land
+    out_dir: "data/estimates/placeholder"
+  # Monte Carlo replicates of the placeholder (estimates/03_montecarlo_replicates.R):
+  # n_rep clipped-normal draws per AOI for one year, as a Parquet dataset.
+  montecarlo:
+    year: 2020
+    n_rep: 50000
+    seed: 11
+    bias_rel: 0.20        # the model over-predicts: mean = tof * (1 + bias_rel) + fp_frac * eligible
+    fp_frac: 0.001        # false-positive floor, share of eligible land, applied to every AOI
+    cv: 0.30              # spread growing with TOF: sd = sqrt((cv * tof)^2 + (sd_floor_frac * eligible)^2)
+    sd_floor_frac: 0.0015 # spread floor, share of eligible land (tight where there are no trees)
+    out_dir: "data/estimates/placeholder/montecarlo_lrr_F_2020"
+  # Area-weighted estimates for every replicate (estimates/04_replicate_estimates.R):
+  # reads the montecarlo dataset; year and n_rep come from the block above.
+  replicates:
+    out_dir: "data/estimates/replicates"
+    # Optional: also run the partner's wide CSV for one MLRA and check it against
+    # the Parquet result; NULL skips it.
+    wide_csv_check: "data/estimates/placeholder/montecarlo_lrr_F_2020/montecarlo_wide_lrr_F_2020_mlra_54.csv"
   paths:
     sample_csv:      "data/reference/sampleGrids/selectedSample_lrr_F_05_2026.csv"
     masks_outputs:   "data/masks/outputs/llr_masks"
+    aoi_areas_csv:   "data/estimates/aoiAreas_lrr_F.csv"          # 01_aoi_areas.R output
+    aoi_gpkg:        "data/estimates/aoi_lrr_F_clipped.gpkg"      # the clipped AOIs, one layer per year
     naip_export_dir: "data/naip/exportData"
     model_dir:       "data/tof/predictions"
     model_table:     "data/estimates/synthetic/synthetic_cells_lrr_F.csv"

@@ -53,6 +53,10 @@ source("sampling/01_map_lrr_sites.R")  # whole-LRR sample design map and site-ro
 source("sampling/02_map_mlra_sites.R") # one map pair per MLRA, layers clipped to each MLRA
 source("estimates/tools/make_synthetic_cells.R")  # synthetic model output while none exists
 source("estimates/00_run_estimates.R")  # area-weighted TOF estimates per MLRA and LRR
+source("estimates/01_aoi_areas.R")      # sampled cells clipped to their MLRA, areas against the combined mask
+source("estimates/02_placeholder_tof.R") # NLCD-calibrated placeholder TOF per AOI, the partner spreadsheet
+source("estimates/03_montecarlo_replicates.R") # 50,000 replicates per AOI for 2020, Parquet dataset
+source("estimates/04_replicate_estimates.R")   # area-weighted estimates for every replicate, and their summaries
 ```
 
 The tracked sample lists in `data/reference/sampleGrids/` are the May 2026

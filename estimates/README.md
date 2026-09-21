@@ -15,7 +15,15 @@ every MLRA and the LRR). Settings live in the `estimates` section of the root
 | Script | What it does |
 |--------|--------------|
 | `00_run_estimates.R` | Driver: cell list, model output (table or rasters), stratum areas per target year (cached), MLRA and LRR estimates, all written to `estimates$paths$out_dir`. |
-| `functions/areas.R` | `mask_layers()`, `polygon_mask_areas()`, `cell_geometry()`, `cell_areas()`, `stratum_areas()`. |
+| `01_aoi_areas.R` | The sampled cells clipped to the MLRA that drew them, with total, masked and eligible area per target year against the combined mask. See [Clipped AOIs](#clipped-aois). |
+| `02_placeholder_tof.R` | Placeholder TOF per clipped AOI and year, calibrated to each MLRA's NLCD forest share, packaged as the partner spreadsheet. See [Placeholder for partners](#placeholder-for-partners). |
+| `functions/areas.R` | `mask_layers()`, `polygon_mask_areas()`, `cell_geometry()`, `cell_areas()`, `stratum_areas()`; against the combined mask: `combined_mask()`, `mask_area_m2()`, `clip_cells_to_mlra()`. |
+| `03_montecarlo_replicates.R` | Monte Carlo replicates of the placeholder for one year: 50,000 clipped-normal draws per AOI as a Parquet dataset. See [Monte Carlo replicates](#monte-carlo-replicates). |
+| `functions/placeholder.R` | `placeholder_tof()`, `calibrate_group()`: the seeded, calibrated stand-in. |
+| `functions/montecarlo.R` | `mc_params()`, `mc_draw()`, `mc_summary()`: per-AOI normal parameters, the draws, their summary. |
+| `04_replicate_estimates.R` | Area-weighted estimates for every replicate, per MLRA and for the LRR, and their summary statistics. See [Estimates over the replicates](#estimates-over-the-replicates). |
+| `functions/replicate_estimators.R` | `replicate_matrix()`, `read_wide_csv_matrix()`, `replicate_ratio()`, `replicate_mlra()`, `replicate_lrr()`, `summarise_replicates()`: the estimators of `estimators.R` applied to a replicate matrix. |
+| `test/test_replicate_estimators.R` | Hand-built matrix; every replicate must equal `estimate_mlra()` / `estimate_lrr()` run on it alone. |
 | `functions/model_output.R` | Table mode: `read_model_table()`, `join_model_table()`. Raster mode: `naip_year_table()`, `model_path()`, `read_model_cell()`, `join_model_output()`. |
 | `functions/estimators.R` | `estimate_mlra()`, `estimate_lrr()`, `ratio_estimate()`. |
 | `functions/synthetic.R` | `synthetic_truth()`, `synthetic_cells()`: seeded stand-in for the model output. |
@@ -27,7 +35,129 @@ every MLRA and the LRR). Settings live in the `estimates` section of the root
 Rscript estimates/test/test_estimators.R
 Rscript estimates/test/test_synthetic_recovery.R
 Rscript estimates/tools/make_synthetic_cells.R   # then source("estimates/00_run_estimates.R")
+Rscript estimates/01_aoi_areas.R                 # clipped AOIs and their areas (needs the combined masks)
+Rscript estimates/02_placeholder_tof.R           # the partner spreadsheet
+Rscript estimates/03_montecarlo_replicates.R     # 50,000 replicates per AOI for 2020, Parquet (about 4 minutes)
+Rscript estimates/test/test_replicate_estimators.R
+Rscript estimates/04_replicate_estimates.R       # estimates for every replicate and their summaries (about 2 minutes)
 ```
+
+## Clipped AOIs
+
+`01_aoi_areas.R` builds one feature per `(id, MLRA_ID)` pair in the sample
+list: the 1 km cell clipped to the MLRA polygon that drew it. A cell drawn by
+two neighbouring MLRAs (15 in F) becomes two pieces, one per MLRA; the MLRA
+polygons do not overlap, so neither do the pieces, and every square metre of
+the sample is counted once. In F that is 15,395 AOIs, 14,599 whole cells and
+796 clipped ones, the smallest a sliver of about 1 m².
+
+For each target year the masked area is the exact vector intersection with
+the masks stage's combined mask (`llr_F_mask_<year>.gpkg`, forest and places
+unioned), and eligible is total minus masked. On a random 300 cells this
+agrees with the forest-raster-plus-urban-polygon method above to 0.01 m².
+
+Outputs: `aoiAreas_lrr_F.csv` (long: id, MLRA_ID, target_year, cell_m2,
+aoi_m2, mask_m2, eligible_m2) and `aoi_lrr_F_clipped.gpkg` with one layer per
+year (`aoi_2012`, ...). The whole run takes well under a minute.
+
+Note that `00_run_estimates.R` still uses the unclipped cells of
+`cell_geometry()` with first-MLRA-wins for shared ids; moving the driver and
+`read_model_table()` onto the `(id, MLRA_ID)` key is the open step.
+
+## Placeholder for partners
+
+No model output exists yet, so `02_placeholder_tof.R` writes a stand-in with
+the right shape for partners to build their MLRA-level aggregation on. It is
+**not** a measurement and the workbook's `readme` sheet says so. Two things
+are imposed (`functions/placeholder.R`, settings under `estimates$placeholder`):
+
+- **Calibration.** Within every MLRA and year the area-weighted TOF share of
+  the AOIs, `sum(tof) / sum(aoi_m2)`, equals that MLRA's NLCD forest share
+  (forest / total area from `stratum_areas()`). The script checks this with
+  `estimate_mlra()` and stops if it fails. Aggregating the table by MLRA
+  therefore returns the NLCD forest share exactly; the LRR figure from
+  `estimate_lrr()` comes to about 0.92 % of all land.
+- **Shape.** Zero-inflated with a long right tail: `p_zero` (0.65) of AOIs
+  have no TOF in any year, the rest a lognormal relative level (`sdlog` 1)
+  scaled per MLRA-year, capped at `cap` (0.5) of the AOI's eligible land with
+  the excess redistributed. TOF sits on eligible land only. An AOI's level is
+  drawn once and carried across years with 3 % noise, 1 % of AOIs losing
+  cover from 2016 and 1 % gaining from 2020, as in the synthetic generator.
+  Seeded, so the workbook is reproducible.
+
+Outputs under `estimates$placeholder$out_dir`:
+
+| file | contents |
+|------|----------|
+| `placeholder_tof_lrr_F.xlsx` | sheets `readme`, `aoi_tof` (aoi_id, mlra_id / symbol / name, year, tof_area_m2, mask_area_m2, aoi_area_m2, eligible_area_m2, tof_pct_of_eligible, whole_cell), `mlra_summary` (sums per MLRA-year and the calibration target) |
+| `placeholder_tof_lrr_F.csv` | the `aoi_tof` sheet |
+| `placeholder_model_table_lrr_F.csv` | the same values in the pixel-count layout `read_model_table()` reads, keyed on id, MLRA_ID, target_year |
+| `placeholder_targets_lrr_F.csv` | the per-MLRA-year targets |
+
+## Monte Carlo replicates
+
+The model's real product will carry Monte Carlo replicates per AOI, so
+`03_montecarlo_replicates.R` writes a full-volume stand-in for one year:
+`estimates$montecarlo$n_rep` (50,000) draws for every 2020 AOI of the
+placeholder, about 770 million values. Each AOI gets a normal distribution
+clipped to `[0, eligible]` with
+
+```text
+mean = tof * (1 + bias_rel) + fp_frac * eligible
+sd   = sqrt((cv * tof)^2 + (sd_floor_frac * eligible)^2)
+```
+
+which encodes what is known about the model: it is very good at identifying
+land without trees, so a zero-TOF AOI is drawn tightly around a small
+false-positive floor with a share of its draws clipped to exactly 0; and it
+over-predicts trees across the LRR, so an AOI with TOF is drawn around a mean
+above its placeholder value with a spread that grows with the amount. The
+draws are seeded once and generated MLRA by MLRA in `MLRA_ID` order.
+
+Output is a hive-partitioned Parquet dataset in `replicates/` under
+`estimates$montecarlo$out_dir`, one folder per MLRA (`mlra_id=<id>/part-0.parquet`,
+zstd, about 4 bytes per row) with columns `aoi_id`, `replicate`,
+`tof_area_m2` (float32); read that folder as one table with
+`arrow::open_dataset()`, DuckDB or pyarrow. Beside it, `README.txt` for the
+partner and `montecarlo_summary_lrr_F_2020.csv` with, per AOI, the parameters
+used and the draws' mean, sd, 2.5 / 50 / 97.5 percentiles and share at zero.
+`bias_rel`, `fp_frac`, `cv` and `sd_floor_frac` are the knobs to retune.
+
+`tools/export_montecarlo_wide_csv.R <MLRA_ID>` writes one MLRA's replicates
+as a wide CSV for a partner: `aoi_id`, then `rep_1` .. `rep_50000`, values
+rounded to 0.1 m² (about 430 MB, more columns than Excel allows).
+
+## Estimates over the replicates
+
+`04_replicate_estimates.R` applies the estimator to every replicate. Nothing
+changes in the formula: per MLRA the TOF area of AOI `i` in replicate `r` is
+`X[i, r]` and the denominator `d[i]` (the clipped AOI's total or eligible
+area) is the same in every replicate, so the 50,000 estimates are column sums,
+`R_r = sum_i X[i, r] / sum_i d[i]`, and the linearised standard error is a
+column sum of squared residuals (`functions/replicate_estimators.R`). The LRR
+combines the MLRAs replicate by replicate with the stratum areas, exactly as
+`estimate_lrr()` does; `test/test_replicate_estimators.R` checks that every
+replicate equals the single-replicate estimators run on it alone.
+
+Over the replicates, per MLRA and for the LRR and for both denominators,
+`summarise_replicates()` gives the mean, the standard deviation (the
+model-side uncertainty), median, 2.5 and 97.5 percentiles and range, the root
+mean sampling variance across replicates (the design-side part) and the
+combined standard error, `sqrt(sd^2 + mean(se^2))`. That is the V1 + V2
+combination listed under open points below.
+
+Outputs under `estimates$replicates$out_dir`:
+
+| file | contents |
+|------|----------|
+| `replicateEstimates_mlra_lrr_F_2020.csv` | per MLRA, denominator and replicate: n, sums, estimate, se, pct, pct_se (1.1 million rows) |
+| `replicateEstimates_lrr_F_2020.csv` | per denominator and replicate: the LRR estimate and se |
+| `replicateSummary_mlra_lrr_F_2020.csv` | per MLRA and denominator: the summary above, as fractions and percent |
+| `replicateSummary_lrr_F_2020.csv` | the same for the LRR |
+
+`estimates$replicates$wide_csv_check` names a partner-format wide CSV; when it
+exists the driver runs it through `read_wide_csv_matrix()` and checks that its
+MLRA estimates match the Parquet result.
 
 ## Model output as a pixel-count table
 
