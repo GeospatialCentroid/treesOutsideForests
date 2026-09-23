@@ -119,3 +119,38 @@ summarise_replicates <- function(est, by) {
                   dplyr::across(c(mean, sd, median, q025, q975, min, max, se_sampling, se_combined),
                                 ~ 100 * .x, .names = "pct_{.col}"))
 }
+
+#' LRR summary in one call: per-replicate LRR estimates summarised, with each
+#' MLRA's weight and contribution alongside.
+#'
+#' @param mlra_rep output of replicate_mlra() stacked over MLRAs.
+#' @param strata   data frame with MLRA_ID, total_m2, eligible_m2 (whole MLRA).
+#' @return list:
+#'   lrr           one row per denominator: the summarise_replicates() columns
+#'                 for the LRR plus lrr_area_m2 and the mean TOF area (m²);
+#'   contributions one row per MLRA and denominator: the stratum area, its
+#'                 weight (share of the LRR area), the MLRA's mean estimate over
+#'                 the replicates, its mean TOF area (estimate x area) and the
+#'                 share of the LRR's TOF area it accounts for;
+#'   replicates    the per-replicate LRR estimates (replicate_lrr()).
+summarise_lrr <- function(mlra_rep, strata) {
+  reps <- replicate_lrr(mlra_rep, strata)
+  lrr  <- summarise_replicates(reps, by = "denominator") |>
+    dplyr::left_join(reps |> dplyr::group_by(denominator) |>
+                       dplyr::summarise(lrr_area_m2 = area_m2[1], tof_area_m2_mean = mean(tof_area_m2), .groups = "drop"),
+                     by = "denominator")
+  weights <- strata |>
+    dplyr::select(MLRA_ID, eligible = eligible_m2, total = total_m2) |>
+    tidyr::pivot_longer(c(eligible, total), names_to = "denominator", values_to = "area_m2")
+  contributions <- mlra_rep |>
+    dplyr::group_by(MLRA_ID, denominator) |>
+    dplyr::summarise(n_cells = n[1], mlra_mean = mean(estimate), mlra_sd = stats::sd(estimate), .groups = "drop") |>
+    dplyr::inner_join(weights, by = c("MLRA_ID", "denominator")) |>
+    dplyr::group_by(denominator) |>
+    dplyr::mutate(weight = area_m2 / sum(area_m2),
+                  tof_area_m2_mean = mlra_mean * area_m2,
+                  share_of_lrr_tof = tof_area_m2_mean / sum(tof_area_m2_mean)) |>
+    dplyr::ungroup() |>
+    dplyr::arrange(denominator, MLRA_ID)
+  list(lrr = lrr, contributions = contributions, replicates = reps)
+}

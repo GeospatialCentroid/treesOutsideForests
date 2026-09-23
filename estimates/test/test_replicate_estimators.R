@@ -59,6 +59,17 @@ check("summary: mean over the 4 replicates", near(tot$mean, mean(c(75000, 0, 150
 check("summary: combined se = sqrt(sd^2 + mean(se^2))",
       near(tot$se_combined, sqrt(tot$sd^2 + mean(mr$se[mr$denominator == "total"]^2))))
 
+# --- summarise_lrr(): one call, same numbers, weights sum to one -------------------
+sl <- summarise_lrr(mr2, strata)
+lrr_two_step <- summarise_replicates(replicate_lrr(mr2, strata), by = "denominator")
+check("summarise_lrr: LRR summary equals the two-step result",
+      near(sl$lrr$mean, lrr_two_step$mean) && near(sl$lrr$se_combined, lrr_two_step$se_combined))
+tot <- sl$contributions[sl$contributions$denominator == "total", ]
+check("summarise_lrr: weights are the stratum area shares and sum to one",
+      near(tot$weight, c(6e10, 2e10) / 8e10) && near(sum(tot$share_of_lrr_tof), 1))
+check("summarise_lrr: mean TOF area = sum of MLRA contributions",
+      near(sum(tot$tof_area_m2_mean), sl$lrr$tof_area_m2_mean[sl$lrr$denominator == "total"]))
+
 # --- Matrix builders round-trip -------------------------------------------------------
 long <- tibble::tibble(aoi_id = rep(rownames(X), times = 4), replicate = rep(1:4, each = 3), tof_area_m2 = as.vector(X))
 check("replicate_matrix() rebuilds the matrix from the long table", identical(replicate_matrix(long), X))

@@ -22,7 +22,7 @@ every MLRA and the LRR). Settings live in the `estimates` section of the root
 | `functions/placeholder.R` | `placeholder_tof()`, `calibrate_group()`: the seeded, calibrated stand-in. |
 | `functions/montecarlo.R` | `mc_params()`, `mc_draw()`, `mc_summary()`: per-AOI normal parameters, the draws, their summary. |
 | `04_replicate_estimates.R` | Area-weighted estimates for every replicate, per MLRA and for the LRR, and their summary statistics. See [Estimates over the replicates](#estimates-over-the-replicates). |
-| `functions/replicate_estimators.R` | `replicate_matrix()`, `read_wide_csv_matrix()`, `replicate_ratio()`, `replicate_mlra()`, `replicate_lrr()`, `summarise_replicates()`: the estimators of `estimators.R` applied to a replicate matrix. |
+| `functions/replicate_estimators.R` | `replicate_matrix()`, `read_wide_csv_matrix()`, `replicate_ratio()`, `replicate_mlra()`, `replicate_lrr()`, `summarise_replicates()`, `summarise_lrr()`: the estimators of `estimators.R` applied to a replicate matrix. |
 | `test/test_replicate_estimators.R` | Hand-built matrix; every replicate must equal `estimate_mlra()` / `estimate_lrr()` run on it alone. |
 | `functions/model_output.R` | Table mode: `read_model_table()`, `join_model_table()`. Raster mode: `naip_year_table()`, `model_path()`, `read_model_cell()`, `join_model_output()`. |
 | `functions/estimators.R` | `estimate_mlra()`, `estimate_lrr()`, `ratio_estimate()`. |
@@ -153,7 +153,12 @@ Outputs under `estimates$replicates$out_dir`:
 | `replicateEstimates_mlra_lrr_F_2020.csv` | per MLRA, denominator and replicate: n, sums, estimate, se, pct, pct_se (1.1 million rows) |
 | `replicateEstimates_lrr_F_2020.csv` | per denominator and replicate: the LRR estimate and se |
 | `replicateSummary_mlra_lrr_F_2020.csv` | per MLRA and denominator: the summary above, as fractions and percent |
-| `replicateSummary_lrr_F_2020.csv` | the same for the LRR |
+| `replicateSummary_lrr_F_2020.csv` | the same for the LRR, plus the LRR area and mean TOF area |
+| `replicateContributions_lrr_F_2020.csv` | per MLRA and denominator: stratum area, weight, mean estimate and sd over replicates, mean TOF area and share of the LRR's TOF |
+
+`summarise_lrr()` produces the LRR level in one call from the per-MLRA
+replicate estimates and the stratum areas: the per-replicate LRR estimates,
+their summary, and each MLRA's weight and contribution.
 
 `estimates$replicates$wide_csv_check` names a partner-format wide CSV; when it
 exists the driver runs it through `read_wide_csv_matrix()` and checks that its

@@ -63,17 +63,21 @@ mlra_rep <- purrr::map_dfr(mlra_ids, function(h) {
 mlra_rep <- mlra_rep |> dplyr::mutate(target_year = year, .after = MLRA_ID)
 readr::write_csv(mlra_rep, file.path(out_dir, sprintf("replicateEstimates_mlra_lrr_%s_%d.csv", llr_id, year)))
 
-# --- LRR, every replicate ----------------------------------------------------------
-lrr_rep <- replicate_lrr(mlra_rep, strata) |> dplyr::mutate(LLR_ID = llr_id, target_year = year, .before = 1)
-readr::write_csv(lrr_rep, file.path(out_dir, sprintf("replicateEstimates_lrr_%s_%d.csv", llr_id, year)))
-
-# --- Summaries over the replicates ---------------------------------------------------
+# --- Summaries over the replicates: per MLRA ----------------------------------------
 mlra_sum <- summarise_replicates(mlra_rep, by = c("MLRA_ID", "target_year", "denominator")) |>
   dplyr::left_join(mlra_names, by = "MLRA_ID") |>
   dplyr::relocate(MLRARSYM, MLRA_NAME, .after = MLRA_ID)
-lrr_sum <- summarise_replicates(lrr_rep, by = c("LLR_ID", "target_year", "denominator"))
 readr::write_csv(mlra_sum, file.path(out_dir, sprintf("replicateSummary_mlra_lrr_%s_%d.csv", llr_id, year)))
-readr::write_csv(lrr_sum,  file.path(out_dir, sprintf("replicateSummary_lrr_%s_%d.csv", llr_id, year)))
+
+# --- LRR: every replicate, the summary and each MLRA's contribution, in one call ------
+lrr <- summarise_lrr(mlra_rep, strata)
+lrr_rep <- lrr$replicates |> dplyr::mutate(LLR_ID = llr_id, target_year = year, .before = 1)
+lrr_sum <- lrr$lrr |> dplyr::mutate(LLR_ID = llr_id, target_year = year, .before = 1)
+lrr_con <- lrr$contributions |> dplyr::left_join(mlra_names, by = "MLRA_ID") |>
+  dplyr::relocate(MLRARSYM, MLRA_NAME, .after = MLRA_ID) |> dplyr::mutate(LLR_ID = llr_id, target_year = year, .before = 1)
+readr::write_csv(lrr_rep, file.path(out_dir, sprintf("replicateEstimates_lrr_%s_%d.csv", llr_id, year)))
+readr::write_csv(lrr_sum, file.path(out_dir, sprintf("replicateSummary_lrr_%s_%d.csv", llr_id, year)))
+readr::write_csv(lrr_con, file.path(out_dir, sprintf("replicateContributions_lrr_%s_%d.csv", llr_id, year)))
 
 # --- Optional: the partner's wide CSV gives the same numbers -----------------------------
 wide_path <- cfg_est$replicates$wide_csv_check
@@ -92,4 +96,7 @@ if (!is.null(wide_path) && file.exists(tof_path(wide_path))) {
 print(mlra_sum |> dplyr::filter(denominator == "total") |>
         dplyr::select(MLRARSYM, pct_mean, pct_sd, pct_q025, pct_q975, pct_se_sampling, pct_se_combined), n = Inf)
 print(lrr_sum |> dplyr::select(denominator, pct_mean, pct_sd, pct_q025, pct_q975, pct_se_sampling, pct_se_combined))
+print(lrr_con |> dplyr::filter(denominator == "total") |>
+        dplyr::transmute(MLRARSYM, weight = round(weight, 3), pct_mean = round(100 * mlra_mean, 3),
+                         tof_km2 = round(tof_area_m2_mean / 1e6), share_of_lrr_tof = round(share_of_lrr_tof, 3)), n = Inf)
 message("Wrote ", out_dir)
