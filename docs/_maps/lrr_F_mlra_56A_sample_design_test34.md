@@ -10,8 +10,7 @@ map: maps/mlra/lrr_F_mlra_56A_sample_design_test34.html
 png: maps/mlra/lrr_F_mlra_56A_sample_design_test34.png
 sampled: '1,394'
 training: 8
-validation: 1
-test: 4
+validation: 5
 ---
 
 <!-- Edit this text freely. The build script only refreshes the front matter above. -->

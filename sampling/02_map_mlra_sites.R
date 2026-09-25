@@ -31,7 +31,7 @@ for (i in seq_len(nrow(mlra))) {
       area = this, clipped = clipped, lrr = lrr, mlra = this, mlra_cols = mlra_cols[this$mlra_label],
       title = title, subtitle = subtitle,
       caption  = paste(sprintf("Sampled cells drawn as 1 km outlines. Heavy line is the LRR %s boundary; grey labels are states.", llr_id),
-                       role_source_text(key)),
+                       role_source_text(key), sep = "\n"),
       out_png = paste0(stub, ".png"), cells_as = "outlines", mlra_legend = FALSE,
       width  = if (aspect > 1) max(7, 12 / aspect + 1) else 12,
       height = if (aspect > 1) 12 else max(6, 12 * aspect + 1.5))

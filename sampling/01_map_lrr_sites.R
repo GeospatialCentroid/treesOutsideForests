@@ -24,7 +24,7 @@ for (key in names(partitions)) {
   static_site_map(
     area = lrr, clipped = clipped, lrr = lrr, mlra = mlra, mlra_cols = mlra_cols,
     title = title, subtitle = subtitle,
-    caption  = paste(role_source_text(key), "Bold labels are MLRA symbols; grey labels are states."),
+    caption  = paste(role_source_text(key), "Bold labels are MLRA symbols; grey labels are states.", sep = "\n"),
     out_png = paste0(stub, ".png"), cells_as = "points", mlra_legend = TRUE)
 
   web_site_map(clipped, lrr = lrr, mlra = mlra, mlra_cols = mlra_cols, out_html = paste0(stub, ".html"),

@@ -8,8 +8,7 @@ map: maps/lrr_F_sample_design_test34.html
 png: maps/lrr_F_sample_design_test34.png
 sampled: '15,148'
 training: 86
-validation: 14
-test: 34
+validation: 48
 ---
 
 <!-- Edit this text freely. The build script only refreshes the front matter above. -->
