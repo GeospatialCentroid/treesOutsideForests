@@ -21,6 +21,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from tofunet.config import load_config, pick_device, setup_logging, tof_path  # noqa: E402
 from tofunet.model import load_checkpoint  # noqa: E402
+from tofunet.predict import predict_scene, read_scene  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("inputs", nargs="+")
@@ -29,7 +30,9 @@ ap.add_argument("--out", required=True)
 ap.add_argument("--window", type=int, default=512)
 ap.add_argument("--threshold", type=float, default=None)
 ap.add_argument("--batch-size", type=int, default=4)
-ap.add_argument("--device", default=None)
+ap.add_argument("--device", default=None, help="auto (config default), cpu, or cuda / cuda:N (ROCm builds also present as cuda)")
+ap.add_argument("--harmonized", action="store_true",
+                help="read each input from the harmonised tree (config harmonize.paths.out_dir) instead of the export tree")
 args = ap.parse_args()
 
 cfg = load_config(); cm = cfg["model"]
@@ -43,51 +46,40 @@ threshold = args.threshold if args.threshold is not None else float(meta["thresh
 mean = np.array(meta["band_stats"]["mean"], dtype=np.float32).reshape(4, 1, 1)
 std = np.array(meta["band_stats"]["std"], dtype=np.float32).reshape(4, 1, 1)
 
-files = []
+files: list[tuple[Path, bool]] = []   # (path, read from the harmonised tree)
 for inp in args.inputs:
-    p = Path(inp)
-    files += sorted(p.glob("*.tif")) if p.is_dir() else [p]
+    p = Path(inp).resolve(); swapped = False
+    if args.harmonized:
+        # The harmonised tree mirrors the export tree, so swap the root and keep
+        # the rest of the path. A cell-year that was never harmonised is read raw.
+        export_root = tof_path(cfg["harmonize"]["paths"]["export_dir"]).resolve()
+        harm_root = tof_path(cfg["harmonize"]["paths"]["out_dir"]).resolve()
+        try:
+            q = harm_root / p.relative_to(export_root)
+        except ValueError:
+            q = p
+        if q.exists():
+            p, swapped = q, True
+        else:
+            log.warning("%s has no harmonised counterpart; reading the raw export.", inp)
+    files += [(f, swapped) for f in (sorted(p.glob("*.tif")) if p.is_dir() else [p])]
 
 
-def cosine_weight(n: int) -> np.ndarray:
-    w = 0.5 - 0.5 * np.cos(2 * np.pi * (np.arange(n) + 0.5) / n)
-    return np.outer(w, w).astype(np.float32) + 1e-3
-
-
-@torch.no_grad()
-def predict_scene(img: np.ndarray, window: int, batch: int) -> np.ndarray:
-    C, H, W = img.shape
-    step = window // 2
-    pad_h = (-(H - window)) % step if H > window else window - H
-    pad_w = (-(W - window)) % step if W > window else window - W
-    x = np.pad(img.astype(np.float32) / 255.0, ((0, 0), (0, pad_h), (0, pad_w)), mode="reflect")
-    x = (x - mean) / std
-    Hp, Wp = x.shape[1:]
-    prob = np.zeros((Hp, Wp), dtype=np.float32); wsum = np.zeros((Hp, Wp), dtype=np.float32)
-    wt = cosine_weight(window)
-    origins = [(r, c) for r in range(0, Hp - window + 1, step) for c in range(0, Wp - window + 1, step)]
-    for i in range(0, len(origins), batch):
-        chunk = origins[i:i + batch]
-        xb = torch.from_numpy(np.stack([x[:, r:r + window, c:c + window] for r, c in chunk])).to(device)
-        pb = torch.sigmoid(model(xb).float())[:, 0].cpu().numpy()
-        for (r, c), p in zip(chunk, pb):
-            prob[r:r + window, c:c + window] += p * wt; wsum[r:r + window, c:c + window] += wt
-    return (prob / wsum)[:H, :W]
-
-
-for f in files:
-    with rasterio.open(f) as src:
-        if src.count != 4:
-            log.warning("%s has %d bands, expected 4; skipped.", f.name, src.count); continue
-        img = src.read(); profile = src.profile
-    nodata = ~img.any(axis=0)
-    prob = predict_scene(img, args.window, args.batch_size)
+for f, harmonised in files:
+    try:
+        img, nodata, profile = read_scene(f)
+    except ValueError as e:
+        log.warning("%s; skipped.", e); continue
+    prob = predict_scene(model, img, mean, std, args.window, args.batch_size, device)
     prob[nodata] = np.nan
     binary = np.where(nodata, 255, (prob >= threshold).astype(np.uint8)).astype(np.uint8)
     prob_profile = profile | {"count": 1, "dtype": "float32", "nodata": np.nan, "compress": "deflate", "tiled": True}
     bin_profile = profile | {"count": 1, "dtype": "uint8", "nodata": 255, "compress": "deflate", "tiled": True}
-    for key in ("photometric",):
+    # Raw exports are strip-organised (one row per block); tiled output needs
+    # its own block size, so the source's block keys are dropped.
+    for key in ("photometric", "blockxsize", "blockysize"):
         prob_profile.pop(key, None); bin_profile.pop(key, None)
+    prob_profile.update(blockxsize=256, blockysize=256); bin_profile.update(blockxsize=256, blockysize=256)
     with rasterio.open(out_dir / f"{f.stem}_tof_prob.tif", "w", **prob_profile) as dst:
         dst.write(prob.astype(np.float32), 1)
         dst.update_tags(model_run=meta["run_name"], encoder=meta["encoder"], threshold=str(threshold))
@@ -95,4 +87,5 @@ for f in files:
         dst.write(binary, 1)
         dst.update_tags(model_run=meta["run_name"], encoder=meta["encoder"], threshold=str(threshold),
                         legend="0 no tree, 1 tree, 255 no data")
-    log.info("%s: tree share %.3f (threshold %.2f)", f.name, float((binary == 1).sum() / max((~nodata).sum(), 1)), threshold)
+    log.info("%s: tree share %.3f (threshold %.2f)%s", f.name, float((binary == 1).sum() / max((~nodata).sum(), 1)), threshold,
+             "  [harmonised]" if harmonised else "")

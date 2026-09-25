@@ -148,6 +148,25 @@ estimates:
     model_table:     "data/estimates/synthetic/synthetic_cells_lrr_F.csv"
     out_dir:         "data/estimates"
 
+# ------------------------------------------------------------ harmonize/ ----
+# Optional radiometric harmonisation of the NAIP exports across years
+# (harmonize/0_run.R). Builds data/naip/harmonized/ with the same layout as
+# the export tree; point the model's prediction at it with --harmonized.
+harmonize:
+  mode: "consensus"          # consensus: remap only a KS-flagged outlier year; reference: remap every year to reference_year
+  reference_year: "latest"   # reference mode only: "latest" or a year such as 2020
+  eval_bands: ["blue", "nir"]  # bands the KS drift test looks at (all four bands are remapped)
+  ks_threshold: 0.15         # a candidate outlier must be at least this far from the consensus pair ...
+  ks_relative: 2.0           # ... and this many times further than the pair is from each other
+  ks_sample: 10000           # regular sample per raster for the KS tests
+  n_quantiles: 256           # quantile matching resolution (8-bit range)
+  workers: 6
+  overwrite: false           # true redoes cells that already have harmonization.json
+  cells: null                # optional list of cell ids; null = every cell in the export tree
+  paths:
+    export_dir: "data/naip/exportData"
+    out_dir:    "data/naip/harmonized"
+
 # ---------------------------------------------------------------- model/ ----
 # U-Net tree / no-tree model trained on the reference masks (see model/README.md).
 model:
@@ -179,8 +198,8 @@ model:
   patience: 8              # epochs without validation F1 gain before stopping
   learning_rate: 0.0003
   weight_decay: 0.0001
-  threads: 16              # torch intra-op threads (CPU); leaves cores for the concurrent service
-  device: "auto"           # auto = GPU when CUDA is visible, else CPU; or cpu / cuda / cuda:N
+  threads: 8               # torch intra-op threads (CPU); ubuntu-gpu has 12 cores, leave some for the loader workers and the concurrent service
+  device: "auto"           # auto = GPU when CUDA or ROCm is visible, else CPU; or cpu / cuda / cuda:N (ROCm GPUs appear as "cuda" too)
   mixed_precision: true    # bfloat16/float16 autocast on the GPU (ignored on CPU)
   loader_workers: 4
   seed: 2026
@@ -188,5 +207,7 @@ model:
   # system memory available drops below this, so it never competes with the
   # concurrent service for the last gigabytes. The run scripts also wrap the
   # process in a user cgroup with MemoryMax = cgroup_max_gb.
-  min_available_gb: 12
-  cgroup_max_gb: 40
+  # ubuntu-gpu has 23 GB of RAM, so the ceiling sits below that; the CPU host
+  # that ran the first training used 12 / 40.
+  min_available_gb: 8
+  cgroup_max_gb: 16

@@ -44,6 +44,7 @@ Thumbs.db
 
 # model/ stage: the virtual environment and pip caches live beside the code
 model/.venv/
+model/.venv-*/
 model/.pip-cache/
 model/.pip-tmp/
 __pycache__/

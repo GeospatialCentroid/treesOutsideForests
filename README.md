@@ -9,6 +9,7 @@ Pipeline for estimating trees outside forests (TOF) by USDA Land Resource Region
 | `naip/`   | NAIP acquisition and SNIC segmentation over AOIs     | naipScrape         |
 | `sampling/` | Systematic sample grid draw, sample design maps and site-role assignment | new; grid draw ported from neymanSampling; agroforestrySampling to follow |
 | `estimates/` | Area-weighted TOF estimates per MLRA and LRR from the per-cell model output | new |
+| `harmonize/` | Optional radiometric harmonisation of the NAIP exports across years (KS-gated quantile matching), a second export tree the model can read | ported from neymanSampling |
 | `model/` | U-Net tree / no-tree model: NAIP fetch for the reference masks, training, evaluation, prediction (CPU PyTorch) | new; reference scripts in `U-Net/` and `agroforestry_trainingValidation/scripts/` |
 
 Each stage keeps its own README. This file covers what is shared.
@@ -24,8 +25,10 @@ treesOutsideForests/
 │   ├── reference/              # small tracked inputs: LRR, MLRA, 100 km grid, sample grids
 │   ├── masks/                  # large working data for masks/    (ignored)
 │   ├── naip/                   # large working data for naip/     (ignored)
+│   ├── naip/harmonized/        # harmonised NAIP tree from harmonize/ (ignored)
 │   ├── sampling/               # redrawn grids, maps, cached layers (ignored)
 │   └── model/                  # aligned pairs, band stats, training runs (ignored)
+├── harmonize/
 ├── masks/
 ├── model/
 ├── naip/

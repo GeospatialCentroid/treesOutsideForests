@@ -1,5 +1,6 @@
-# CPU-only PyTorch stack for the trees-outside-forests U-Net (model/).
-# Install with model/tools/setup_env.sh, which points pip at the CPU wheel index.
+# PyTorch stack for the trees-outside-forests U-Net (model/).
+# Install with model/tools/setup_env.sh, which points pip at the wheel index
+# for the chosen flavour (cpu, cu<ver> or rocm<ver>); the packages are the same.
 torch>=2.4
 torchvision>=0.19
 segmentation-models-pytorch>=0.4

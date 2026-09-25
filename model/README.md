@@ -2,17 +2,19 @@
 
 Trains the tree / no-tree U-Net on the reference masks in
 `agroforestry_trainingValidation/lrr_F/` and applies it to 4-band NAIP
-imagery. PyTorch, CPU only (this machine has no GPU), with a pretrained
-ResNet encoder from `segmentation_models_pytorch`.
+imagery. PyTorch with a pretrained ResNet encoder from
+`segmentation_models_pytorch`; runs on the CPU, an NVIDIA GPU (CUDA) or an
+AMD GPU (ROCm) from the same code, chosen by `model.device` in `config.yml`.
 
 | Script | What it does |
 |--------|--------------|
-| `tools/setup_env.sh` | Builds `model/.venv` with the CPU PyTorch stack (`requirements.txt`). The system Python has no pip, so pip is bootstrapped from get-pip.py; caches go beside the venv on the share, not on the small root disk. |
+| `tools/setup_env.sh` | Builds a venv with the PyTorch stack (`requirements.txt`) for one flavour: `cpu` (default, `model/.venv`), `cu<ver>` (`model/.venv-cuda`) or `rocm<ver>` (`model/.venv-rocm`). `TOF_VENV=<dir>` relocates it, which matters for GPU wheels: they are several GB and import slowly over NFS, so put them on a local disk. The system Python has no pip, so pip is bootstrapped from get-pip.py; caches go beside the venv. |
 | `00_fetch_naip.R` | Fetches the NAIP 1 km export for every `(cell, year)` a mask names, through the naip stage's own per-cell worker. Skips cells already exported. |
 | `01_prepare.py` | Pairs each mask with its imagery (same year, same CRS, pixel-aligned grid), writes the aligned pairs as `.npy`, assigns train / validation / test from the configured sampling partition, computes band statistics. |
 | `02_train.py` | Trains, early-stops on validation F1, picks the probability threshold on the validation split, scores the test split. One folder per run. |
 | `03_evaluate.py` | Re-scores a run on any split at any threshold, with a per-scene table. |
-| `04_predict.py` | Tree maps (probability + binary GeoTIFF) for any 4-band NAIP scene, seamless sliding-window inference. |
+| `04_predict.py` | Tree maps (probability + binary GeoTIFF) for any 4-band NAIP scene, seamless sliding-window inference. `--harmonized` reads the `harmonize/` tree instead of the raw exports. |
+| `tools/compare_harmonized.py` | Scores a run on the masked scenes the `harmonize/` step remapped, raw against harmonised, pooled for training and held-out scenes (the table in `harmonize/README.md`). |
 | `tools/run_guarded.sh` | Runs a command under a hard memory ceiling (user cgroup) with a memory log. |
 | `tools/memwatch.sh` | The memory logger the guard uses. |
 
@@ -21,12 +23,34 @@ Settings live in the `model` section of the root `config.yml`.
 ## Running
 
 ```sh
-model/tools/setup_env.sh                                   # once
+model/tools/setup_env.sh                                   # once (CPU); see below for a GPU
 Rscript model/00_fetch_naip.R                              # imagery for the mask cells (about 30 min)
 model/.venv/bin/python model/01_prepare.py                 # pairs, splits, band stats (about a minute)
 model/tools/run_guarded.sh model/.venv/bin/python model/02_train.py
 model/.venv/bin/python model/04_predict.py --run data/model/runs/<run> --out <dir> <naip.tif ...>
 ```
+
+### On the AMD GPU (ubuntu-gpu)
+
+The host `ubuntu-gpu` has an RDNA4 card (gfx1201, 32 GB) passed through to
+the VM. Nothing beyond the in-tree `amdgpu` kernel driver is needed on the
+system: the ROCm PyTorch wheels bundle the HIP runtime, and ROCm shows up
+through the `torch.cuda` API, so `device: auto` picks it and `mixed_precision`
+runs in bfloat16. The venv lives on the local disk because the repo is on NFS:
+
+```sh
+TOF_VENV=~/venvs/tof-rocm model/tools/setup_env.sh rocm7.2   # once; prints the GPU it sees
+py=~/venvs/tof-rocm/bin/python
+model/tools/run_guarded.sh $py model/02_train.py --run-name <name>
+$py model/04_predict.py --run data/model/runs/<run> --out <dir> <naip.tif ...>
+```
+
+If `torch.cuda.is_available()` is false although `/dev/kfd` exists and the
+user is in the `render` group, `HSA_OVERRIDE_GFX_VERSION=12.0.1` is the usual
+fix for a card the wheel does not list; gfx1201 should not need it. Memory
+settings in `config.yml` (`threads`, `min_available_gb`, `cgroup_max_gb`) are
+sized for this 12-core, 23 GB VM; the first CPU run used 16 / 12 / 40 on a
+larger host.
 
 Outputs (ignored by git) land under `data/model/`: `manifest.csv` (every mask,
 its imagery, split and status), `band_stats.json`, `pairs/`, `fetch_naip_report.csv`,
