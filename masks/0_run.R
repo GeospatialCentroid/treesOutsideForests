@@ -21,6 +21,9 @@ source(tof_root("masks/src/01_pipeline_worker.R"))
 # Step 3: Build the LLR-scale forest and urban mask products
 source(tof_root("masks/src/02_llr_masks.R"))
 
+# Step 4: Aggregate the per-year combined masks into one any-year mask
+source(tof_root("masks/src/03_llr_mask_any_year.R"))
+
 options(warn = old_warn)
 
 message("\n=========================================================")

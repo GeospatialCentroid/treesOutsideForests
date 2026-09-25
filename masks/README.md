@@ -27,6 +27,8 @@ Everything lands in `data/masks/outputs/llr_masks/`, one set per year:
 | `llr_F_urban_<year>.gpkg` | those places dissolved into a single urban mask |
 | `llr_F_mask_<year>.gpkg` | **the combined mask**: forest and urban unioned and dissolved into one multipolygon, EPSG:5070 |
 | `llr_F_mask_<year>.tif` | the combined mask on the NLCD grid, `0` = neither, `1` = forest or place, NoData 255 |
+| `llr_F_mask_any_<start>_<end>.gpkg` | **the any-year mask**: the per-year combined masks unioned over the whole period, one multipolygon, EPSG:5070 |
+| `llr_F_mask_any_<start>_<end>.tif` | the any-year mask on the NLCD grid, `1` = forest or place in at least one year, `0` = never, NoData 255 |
 
 The combined mask is the layer downstream stages take as "the masked area".
 Forest and urban overlap (see below), so their union is smaller than their sum;
@@ -48,6 +50,8 @@ README or the summary CSV still says what it is:
 | urban | `urban` (always 1), `year`, `lrr`, `n_places`, `census_source_year`, `census_boundary_type` |
 | mask polygons | `mask` (always 1), `year`, `lrr`, `forest_source`, `nlcd_classes`, `urban_source`, `n_places`, `census_source_year`, `census_boundary_type`, `forest_m2`, `urban_m2`, `overlap_m2`, `mask_m2`, `mask_pct` |
 | mask raster | `mask_type`, `year`, `lrr`, `source`, `nlcd_classes`, `legend`, `study_area`, `note`, as GeoTIFF metadata tags |
+| any-year mask polygons | `mask` (always 1), `lrr`, `period`, `year_start`, `year_end`, `n_years`, `years`, `definition`, `forest_source`, `nlcd_classes`, `urban_source`, `years_without_urban`, `mask_m2`, `max_year_mask_m2`, `max_year`, `mask_pct` |
+| any-year mask raster | `mask_type`, `period`, `years`, `lrr`, `source`, `nlcd_classes`, `legend`, `study_area`, `note`, as GeoTIFF metadata tags |
 
 `area_retained` is the fraction of the place's own uncut geometry that survived
 the clip, so `1` means the boundary did not touch it. `ALAND` and `AWATER`
@@ -101,6 +105,19 @@ The polygon version is what carries the mask across a resolution change: a
 polygon boundary can be intersected against any grid, whereas a 30 m raster can
 only be resampled onto one.
 
+The **any-year mask** (`llr_F_mask_any_2009_2021`) is the per-year combined
+masks aggregated over the period: any area that was forest or a Census place in
+at least one year is in it. The per-year masks move — NLCD forest flickers at
+the pixel level between releases and places grow between Census vintages — so
+a stage that wants one fixed footprint across all years takes this layer
+instead of a year's. The GeoPackage is the exact union of the per-year
+polygons; the raster is the per-pixel maximum over the per-year rasters, and
+differs from the polygon for the same reason the per-year pair does. It is
+only built when every configured year has a combined mask, because a missing
+year would silently narrow what "any year" means. Its attributes name the
+period, the years, both sources, its area, and the largest single-year mask
+for comparison (`max_year_mask_m2`, `max_year`).
+
 ## Study area
 
 All products are clipped to the LRR polygon **buffered by 1 km**
@@ -125,12 +142,13 @@ treesOutsideForests/
 │       ├── processed/NLCD/        # LRR-scale cropped + binary rasters
 │       └── outputs/llr_masks/     # The products
 └── masks/
-    ├── 0_run.R                    # Runs the three steps in order
+    ├── 0_run.R                    # Runs the four steps in order
     └── src/
         ├── 00_global_init.R       # Reads config.yml, loads packages and the LRR boundary
         ├── 00_census_provenance.R # Is a cached Census file really that year?
         ├── 01_pipeline_worker.R   # Download + prepare NLCD and Census
         ├── 02_llr_masks.R         # Build the LLR-scale products
+        ├── 03_llr_mask_any_year.R # Union the per-year combined masks over the period
         └── 99_audit_census_cache.R # Check the Census cache for silent fallbacks
 ```
 
@@ -142,10 +160,18 @@ From the root project (open `treesOutsideForests.Rproj`):
 source("masks/0_run.R")
 ```
 
-or the final step alone, once the inputs are cached:
+or the per-year step alone, once the inputs are cached:
 
 ```sh
 Rscript masks/src/02_llr_masks.R
+```
+
+and the any-year mask alone, once every per-year combined mask exists (it is
+skipped when its outputs are newer than all of them; set
+`llr_overwrite_any <- TRUE` to force it):
+
+```sh
+Rscript masks/src/03_llr_mask_any_year.R
 ```
 
 Target LRR, years, NLCD classes, and the Census policy flags are set in the
@@ -161,7 +187,8 @@ Rscript -e 'llr_overwrite_vectors <- TRUE; source("masks/src/02_llr_masks.R")'
 Step 2 downloads ~1.3 GB per NLCD year on first run and is skipped thereafter.
 Step 3 takes roughly five minutes per year: about two polygonising a
 1.1-billion-cell raster and about three building the combined mask (the
-vector union is the bulk of it).
+vector union is the bulk of it). Step 4 takes about ten minutes for the
+thirteen-year union (six of them unioning 38 million vertices).
 
 ## Source data, year by year
 

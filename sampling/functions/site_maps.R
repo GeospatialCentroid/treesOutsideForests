@@ -2,7 +2,10 @@
 # Every layer handed in is first limited to the area: sites and cells by centroid
 # location, places by intersection, forest by crop-and-mask, states by bbox.
 
-role_labels <- c("Sampled 1 km cell", "Training site", "Validation site")
+# Names are the map roles; values are the legend labels. The partition's test
+# sites are drawn as validation sites (00_prepare_sites.R merges them), so the
+# maps show two site roles.
+role_labels <- c(sample = "Sampled 1 km cell", training = "Training site", validation = "Validation site")
 role_cols   <- c("#b8b6b0", "#4a3aa7", "#e34948")   # neutral + violet/red: passes CVD, normal-vision and contrast checks
 role_shapes <- c(16, 17, 15)
 names(role_cols) <- names(role_shapes) <- role_labels

@@ -7,14 +7,41 @@ assignment built on top of that list.
 | Script | What it does |
 |--------|--------------|
 | `00_draw_sample_grid.R` | Draws the systematic sample grid: about 1400 1 km cells per MLRA, one seeded regular-lattice draw per MLRA, for every LRR in `config.yml` `sampling$grid$lrr_ids`. |
-| `00_prepare_sites.R` | Sourced by the map scripts, not run on its own: reads the sample list and ground-truth ids, keeps the cells inside the LRR, assigns training / validation roles. |
-| `01_map_lrr_sites.R` | Whole-LRR sample design map (static and web). |
-| `02_map_mlra_sites.R` | One map pair per MLRA. |
+| `00_prepare_sites.R` | Sourced by the map scripts, not run on its own: reads the sample list, ground-truth ids and the partition files, keeps the cells inside the LRR, assigns training / validation / test roles per partition. |
+| `01_map_lrr_sites.R` | Whole-LRR sample design map (static and web), one pair per partition. |
+| `02_map_mlra_sites.R` | One map pair per MLRA and partition. |
 | `03_build_site.R` | Assembles the GitHub Pages site in `docs/`. |
 | `test/test_sample_grid_replication.R` | Redraws the grid and checks it against the tracked May 2026 lists, byte for byte. |
 | `tools/derive_frame_corrections.R` | One-off, needs the old neymanSampling grid: builds the frame-corrections table described below. Not part of the pipeline. |
 
 Settings live in the `sampling` section of the root `config.yml`.
+
+## Site roles: training, validation, test
+
+The roles on the maps come from the partner's partition files in
+`data/reference/sampleGrids/`, listed under `sampling$partitions` in
+`config.yml`. Each file has one row per scene (`scene_id` is the 1 km cell id)
+and a `Type` of `Train`, `Validation` or `Test`, plus the partner's own columns
+(state counts, tree percentage, cover class, cluster), which are carried along
+untouched. Two candidate partitions are configured, both over the same 134
+scenes:
+
+| key | file | train | validation | test |
+|-----|------|-------|------------|------|
+| `test34` | `testSetPartition_34_lrr_F_09_2026.csv` (received as `34_test_set_partition.csv`, 24 September 2026) | 86 | 14 | 34 |
+| `test44` | `testSetPartition_44_lrr_F_09_2026.csv` (received as `44_test_set_partition.csv`, 24 September 2026) | 78 | 12 | 44 |
+
+The 44-test version moves ten scenes into the test set (six from train, four
+from validation). On the maps and the site the partition's test sites are drawn
+and counted as validation sites, so each map shows two site roles; the roles
+CSV keeps the three-way assignment. Every partition gets its own map set and its own roles CSV,
+`siteRoles_lrr_F_<key>_09_2026.csv`, with `role` = `training`, `validation`,
+`test`, `sample` (in the sample list, not in the partition) or `unassigned` (a
+ground-truth cell the partition does not use). Removing an entry from
+`partitions` drops it from the maps and the site. With no partition configured
+the scripts fall back to the earlier random split of the ground-truth sites
+(`seed`, `n_training`, `n_validation`); `siteRoles_lrr_F_09_2026.csv` is that
+draw and is no longer used by the maps.
 
 ## The systematic sample grid
 

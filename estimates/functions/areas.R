@@ -129,6 +129,15 @@ combined_mask <- function(masks_dir, llr_id, year, crs = "EPSG:5070") {
   suppressWarnings(sf::st_cast(m, "POLYGON"))
 }
 
+#' Load the any-year combined mask (masks/src/03_llr_mask_any_year.R), split
+#' into its patches like combined_mask(). Attribute `period` names the years.
+any_year_mask <- function(masks_dir, llr_id, year_start, year_end, crs = "EPSG:5070") {
+  path <- file.path(masks_dir, sprintf("llr_%s_mask_any_%d_%d.gpkg", llr_id, as.integer(year_start), as.integer(year_end)))
+  if (!file.exists(path)) stop("No any-year mask for ", llr_id, " ", year_start, "-", year_end, ": ", path, " (run masks/src/03_llr_mask_any_year.R)")
+  m <- sf::st_read(path, quiet = TRUE) |> sf::st_transform(crs)
+  suppressWarnings(sf::st_cast(m, "POLYGON"))
+}
+
 #' Area of the combined mask inside each polygon, in m².
 #'
 #' Exact vector intersection against the mask patches; sf builds a spatial

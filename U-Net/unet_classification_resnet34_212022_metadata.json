@@ -1,0 +1,42 @@
+{
+  "patch_size": 256,
+  "stride": 64,
+  "foreground_threshold": 0.05,
+  "batch_size": 32,
+  "augment_flag": true,
+  "number of training patches": 27416,
+  "number of validation patches": 7102,
+  "optimizer": {
+    "name": "RMSprop",
+    "learning_rate": 0.0001,
+    "clipnorm": 1.0
+  },
+  "early_stopping": {
+    "min_delta": 0.01,
+    "patience": 10
+  },
+  "training_start": "2026-02-16T20:54:15.538837",
+  "training_end": "2026-02-16T21:20:22.613147",
+  "elapsed_time": 1567.07431,
+  "epochs_run": 16,
+  "early_stopping_point_performance": {
+    "accuracy": 0.970156729221344,
+    "f1-score": 0.7750781774520874,
+    "iou_score": 0.6345110535621643,
+    "loss": 0.31487348675727844,
+    "val_accuracy": 0.9780120253562927,
+    "val_f1-score": 0.8508219718933105,
+    "val_iou_score": 0.7413997054100037,
+    "val_loss": 0.21184059977531433
+  },
+  "global_F1_value": 0.8710071221660447,
+  "global_best_threshold": 0.5833333333333333,
+  "test_dataset_metrics": {
+	"accuracy": 0.9866090376735044,
+	"F1_value": 0.7818300029131723,
+	"TP": 5435987,
+	"TN": 218088136,
+	"FP": 1881792,
+	"FN": 1152037
+  }
+}

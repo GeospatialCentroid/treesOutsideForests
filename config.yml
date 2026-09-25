@@ -45,8 +45,17 @@ naip:
 sampling:
   llr_id: "F"
   seed: 125                 # same seed the naip tests use, for reproducible draws
-  # Ground-truth sites inside the LRR are split at random into two roles.
-  # n_training is taken first; validation gets what remains, capped at n_validation.
+  # Site roles come from the partner's train / validation / test partitions:
+  # one CSV per candidate partition, one row per scene (scene_id = 1 km cell
+  # id, Type = Train / Validation / Test). Every entry gets its own map set,
+  # its own site pages and its own roles CSV (paths$roles_csv with {partition}
+  # replaced by the key). Remove an entry to drop it from the maps and the site.
+  partitions:
+    test34: {csv: "data/reference/sampleGrids/testSetPartition_34_lrr_F_09_2026.csv", label: "34 test sites"}
+    test44: {csv: "data/reference/sampleGrids/testSetPartition_44_lrr_F_09_2026.csv", label: "44 test sites"}
+  # Fallback when `partitions` is empty: the ground-truth sites are split at
+  # random (seed above) into n_training training and up to n_validation
+  # validation sites, and the roles CSV is written once and then reused.
   n_training: 120
   n_validation: 70
   interactive_grid_min_zoom: 9    # zoom level at which the sampled 1 km cell outlines appear on the web map
@@ -58,7 +67,7 @@ sampling:
   paths:
     sample_csv:      "data/reference/sampleGrids/selectedSample_lrr_F_05_2026.csv"
     groundtruth_csv: "data/reference/sampleGrids/groundTruth_ids_lrr_F_06_2026.csv"
-    roles_csv:       "data/reference/sampleGrids/siteRoles_lrr_F_09_2026.csv"
+    roles_csv:       "data/reference/sampleGrids/siteRoles_lrr_F_{partition}_09_2026.csv"  # {partition} = a key of `partitions`
     map_dir:         "data/sampling/maps"
     derived_dir:     "data/sampling/derived"      # cached, coarsened context layers
     masks_outputs:   "data/masks/outputs/llr_masks" # products of the masks/ stage
@@ -138,3 +147,46 @@ estimates:
     model_dir:       "data/tof/predictions"
     model_table:     "data/estimates/synthetic/synthetic_cells_lrr_F.csv"
     out_dir:         "data/estimates"
+
+# ---------------------------------------------------------------- model/ ----
+# U-Net tree / no-tree model trained on the reference masks (see model/README.md).
+model:
+  llr_id: "F"
+  # Folders of reference masks, <id>_<year>_mask.tif, 1 m binary, NoData 255.
+  paths:
+    mask_dirs:
+      - "agroforestry_trainingValidation/lrr_F/masks_train"
+      - "agroforestry_trainingValidation/lrr_F/masks_validation"
+    naip_export_dir: "data/naip/exportData"         # the naip stage's per-cell exports
+    work_dir:        "data/model"                    # manifest, aligned pairs, stats
+    runs_dir:        "data/model/runs"               # one folder per training run
+  fetch_workers: 6                                   # parallel NAIP downloads (00_fetch_naip.R)
+  # Which train / validation / test assignment the model follows: a key of
+  # sampling$partitions. Scenes absent from it are left out of training.
+  partition: "test34"
+  # Patch sampling (01_prepare.py / training loader)
+  patch_size: 256
+  train_stride: 128        # training patches overlap by half
+  eval_stride: 256         # validation and test patches tile the scene
+  min_tree_fraction: 0.0   # a training patch counts as a tree patch with any tree pixel; sparse trees are the point
+  background_ratio: 1.0    # background patches kept per tree patch (balances the sample)
+  # Training (02_train.py)
+  encoder: "resnet34"      # any segmentation_models_pytorch encoder
+  encoder_weights: "imagenet"
+  batch_size: 16
+  epochs: 40
+  min_epochs: 8
+  patience: 8              # epochs without validation F1 gain before stopping
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  threads: 16              # torch intra-op threads (CPU); leaves cores for the concurrent service
+  device: "auto"           # auto = GPU when CUDA is visible, else CPU; or cpu / cuda / cuda:N
+  mixed_precision: true    # bfloat16/float16 autocast on the GPU (ignored on CPU)
+  loader_workers: 4
+  seed: 2026
+  # Memory guard: the trainer refuses to start, and stops between epochs, when
+  # system memory available drops below this, so it never competes with the
+  # concurrent service for the last gigabytes. The run scripts also wrap the
+  # process in a user cgroup with MemoryMax = cgroup_max_gb.
+  min_available_gb: 12
+  cgroup_max_gb: 40

@@ -63,13 +63,20 @@ pngs <- pngs[!grepl("/thumbs/|_files/|/libs/", pngs)]   # map PNGs only, not wid
 for (p in pngs) thumbnail(p, file.path(thumb_dir, basename(p)))
 message("Wrote ", length(pngs), " thumbnails")
 
-# --- 3. Card data from the roles table and the MLRA layer ---------------------
-roles <- read_sites_csv(tof_path(cfg_smp$paths$roles_csv))
+# --- 3. Card data from the roles tables and the MLRA layer --------------------
+# One roles CSV per partition (written by 00_prepare_sites.R); every partition
+# gets its own set of cards and pages.
+partitions <- cfg_smp$partitions
+if (length(partitions) == 0) partitions <- list(random = list(csv = NULL, label = sprintf("random split, seed %d", cfg_smp$seed)))
+roles_by <- lapply(names(partitions), function(key)
+  read_sites_csv(tof_path(sub("{partition}", key, cfg_smp$paths$roles_csv, fixed = TRUE))))
+names(roles_by) <- names(partitions)
 mlra  <- sf::st_read(tof_path(cfg$reference$mlra_gpkg), quiet = TRUE) |>
   sf::st_drop_geometry() |> dplyr::filter(LRRSYM == llr_id) |> dplyr::arrange(MLRARSYM)
+# The maps draw the partition's test sites as validation sites, so the counts do too.
+n_of   <- function(r, role) if (role == "validation") sum(r$role %in% c("validation", "test")) else sum(r$role == role)
 counts <- function(r) sprintf("%s sampled cells &middot; %d training &middot; %d validation",
-                              format(sum(r$role == "sample"), big.mark = ","),
-                              sum(r$role == "training"), sum(r$role == "validation"))
+                              format(n_of(r, "sample"), big.mark = ","), n_of(r, "training"), n_of(r, "validation"))
 rel <- function(...) file.path("maps", ...)
 card <- function(title, blurb, stub, dir = NULL) {
   page <- paste0(rel(stub), "/")                      # Jekyll page: maps/<stub>/ (see docs/_config.yml)
@@ -85,12 +92,35 @@ card <- function(title, blurb, stub, dir = NULL) {
       </div>
     </article>')
 }
-lrr_card <- card(sprintf("LRR %s: whole-region sample design", llr_id), counts(roles), sprintf("lrr_%s_sample_design", llr_id))
-mlra_cards <- vapply(seq_len(nrow(mlra)), function(i) {
-  sym <- mlra$MLRARSYM[i]
-  card(sprintf("MLRA %s: %s", sym, mlra$MLRA_NAME[i]), counts(roles[roles$MLRARSYM %in% sym, ]),
-       sprintf("lrr_%s_mlra_%s_sample_design", llr_id, sym), dir = "mlra")
-}, character(1))
+stub_lrr  <- function(key)      sprintf("lrr_%s_sample_design_%s", llr_id, key)
+stub_mlra <- function(key, sym) sprintf("lrr_%s_mlra_%s_sample_design_%s", llr_id, sym, key)
+missing_maps <- unlist(lapply(names(partitions), function(key) {
+  f <- c(rel(paste0(stub_lrr(key), ".html")), rel("mlra", paste0(stub_mlra(key, mlra$MLRARSYM), ".html")))
+  f[!file.exists(file.path(docs, f))]
+}))
+if (length(missing_maps) > 0) stop("Maps not built for every partition; run 01 and 02 first. Missing:\n  ", paste(missing_maps, collapse = "\n  "))
+
+section_html <- function(key) {
+  roles <- roles_by[[key]]; label <- partitions[[key]]$label
+  lrr_card <- card(sprintf("LRR %s: whole-region sample design", llr_id), counts(roles), stub_lrr(key))
+  lrr_card <- sub("<article class=\"card\">", "<article class=\"card feature\">", lrr_card)
+  mlra_cards <- vapply(seq_len(nrow(mlra)), function(i) {
+    sym <- mlra$MLRARSYM[i]
+    card(sprintf("MLRA %s: %s", sym, mlra$MLRA_NAME[i]), counts(roles[roles$MLRARSYM %in% sym, ]),
+         stub_mlra(key, sym), dir = "mlra")
+  }, character(1))
+  glue::glue('
+  <section id="{key}">
+    <h2>Partition: {label}</h2>
+    <p class="meta">{n_of(roles, "training")} training &middot; {n_of(roles, "validation")} validation sites, from <code>{basename(partitions[[key]]$csv %||% "random draw")}</code>.</p>
+    <div class="grid">
+      {lrr_card}
+      {paste(mlra_cards, collapse = "\n")}
+    </div>
+  </section>')
+}
+`%||%` <- function(a, b) if (is.null(a)) b else a
+sections <- paste(vapply(names(partitions), section_html, character(1)), collapse = "\n\n")
 
 # --- 4. One Markdown page per map in docs/_maps/ ------------------------------
 # Jekyll renders _maps/<stub>.md at maps/<stub>/ using _layouts/map.html, which
@@ -112,47 +142,65 @@ write_map_page <- function(stub, front, default_body) {
   path
 }
 dir.create(pages_dir, showWarnings = FALSE)
-lrr_stub <- sprintf("lrr_%s_sample_design", llr_id)
-lrr_page <- write_map_page(lrr_stub,
-  list(title = sprintf("LRR %s: whole-region sample design", llr_id),
-       crumb = sprintf("LRR %s", llr_id), order = 0L,
-       map = rel(paste0(lrr_stub, ".html")), png = rel(paste0(lrr_stub, ".png")),
-       sampled = format(sum(roles$role == "sample"), big.mark = ","),
-       training = sum(roles$role == "training"), validation = sum(roles$role == "validation")),
-  glue::glue("
-    <!-- Edit this text freely. The build script only refreshes the front matter above. -->
-
-    The whole of Land Resource Region {llr_id} with its {nrow(mlra)} Major Land Resource
-    Areas, the 1 km cells drawn for NAIP acquisition, and the ground-truth sites
-    used to train and validate the detection model. Use the layer switcher to
-    show the Census places and NLCD forest context layers; sampled cell outlines
-    appear once you zoom in."))
-mlra_pages <- vapply(seq_len(nrow(mlra)), function(i) {
-  sym <- mlra$MLRARSYM[i]; nm <- mlra$MLRA_NAME[i]
-  stub <- sprintf("lrr_%s_mlra_%s_sample_design", llr_id, sym)
-  r <- roles[roles$MLRARSYM %in% sym, ]
-  write_map_page(stub,
-    list(title = sprintf("MLRA %s: %s", sym, nm), crumb = sprintf("MLRA %s", sym),
-         order = i, mlra = as.character(sym), mlra_name = nm,
-         map = rel("mlra", paste0(stub, ".html")), png = rel("mlra", paste0(stub, ".png")),
-         sampled = format(sum(r$role == "sample"), big.mark = ","),
-         training = sum(r$role == "training"), validation = sum(r$role == "validation")),
+front_counts <- function(r) list(sampled = format(n_of(r, "sample"), big.mark = ","),
+                                 training = n_of(r, "training"), validation = n_of(r, "validation"))
+pages <- character(0)
+for (k in seq_along(partitions)) {
+  key <- names(partitions)[k]; label <- partitions[[key]]$label; roles <- roles_by[[key]]
+  s <- stub_lrr(key)
+  pages <- c(pages, write_map_page(s,
+    c(list(title = sprintf("LRR %s: whole-region sample design (%s)", llr_id, label),
+           crumb = sprintf("LRR %s, %s", llr_id, label), order = (k - 1L) * 100L,
+           partition = key, partition_label = label,
+           map = rel(paste0(s, ".html")), png = rel(paste0(s, ".png"))),
+      front_counts(roles)),
     glue::glue("
       <!-- Edit this text freely. The build script only refreshes the front matter above. -->
 
-      Sample design for MLRA {sym}, {nm}, within LRR {llr_id}: the 1 km cells drawn for
-      NAIP acquisition and the ground-truth sites inside this MLRA."))
-}, character(1))
-stale <- setdiff(list.files(pages_dir, "[.]md$", full.names = TRUE), c(lrr_page, mlra_pages))
+      The whole of Land Resource Region {llr_id} with its {nrow(mlra)} Major Land Resource
+      Areas, the 1 km cells drawn for NAIP acquisition, and the sites used to train
+      and validate the detection model under the {label} partition. Use the
+      layer switcher to show the Census places and NLCD forest context layers;
+      sampled cell outlines appear once you zoom in.")))
+  for (i in seq_len(nrow(mlra))) {
+    sym <- mlra$MLRARSYM[i]; nm <- mlra$MLRA_NAME[i]
+    s <- stub_mlra(key, sym)
+    r <- roles[roles$MLRARSYM %in% sym, ]
+    pages <- c(pages, write_map_page(s,
+      c(list(title = sprintf("MLRA %s: %s (%s)", sym, nm, label), crumb = sprintf("MLRA %s, %s", sym, label),
+             order = (k - 1L) * 100L + i, partition = key, partition_label = label,
+             mlra = as.character(sym), mlra_name = nm,
+             map = rel("mlra", paste0(s, ".html")), png = rel("mlra", paste0(s, ".png"))),
+        front_counts(r)),
+      glue::glue("
+        <!-- Edit this text freely. The build script only refreshes the front matter above. -->
+
+        Sample design for MLRA {sym}, {nm}, within LRR {llr_id}: the 1 km cells drawn for
+        NAIP acquisition and the training and validation sites inside this MLRA
+        under the {label} partition.")))
+  }
+}
+stale <- setdiff(list.files(pages_dir, "[.]md$", full.names = TRUE), pages)
 if (length(stale) > 0) { unlink(stale); message("Removed ", length(stale), " stale map page(s)") }
-message("Wrote ", 1 + length(mlra_pages), " map pages into ", pages_dir)
+message("Wrote ", length(pages), " map pages into ", pages_dir)
 
 # --- 5. Landing page ----------------------------------------------------------
 commit <- tryCatch(system2("git", c("-C", shQuote(tof_root()), "rev-parse", "--short", "HEAD"), stdout = TRUE), error = function(e) "unknown")
 built  <- format(Sys.Date(), "%d %B %Y")
-n_cells <- format(sum(roles$role == "sample"), big.mark = ",")
-n_train <- sum(roles$role == "training"); n_valid <- sum(roles$role == "validation")
+first  <- roles_by[[1]]
+n_cells <- format(n_of(first, "sample"), big.mark = ",")
 n_mlra  <- nrow(mlra); ctx_year <- cfg_smp$context_year
+site_stats <- paste(vapply(names(partitions), function(key) {
+  r <- roles_by[[key]]
+  sprintf('<li><b>%d &middot; %d</b><span>training &middot; validation sites (%s)</span></li>',
+          n_of(r, "training"), n_of(r, "validation"), partitions[[key]]$label)
+}, character(1)), collapse = "\n      ")
+partition_note <- if (is.null(partitions[[1]]$csv)) {
+  sprintf("Training and validation sites are the June 2026 ground-truth cells inside LRR %s, split at random (seed %d).", llr_id, cfg_smp$seed)
+} else {
+  sprintf("Training and validation sites follow the partner's partition files (%s), with the partition's test sites drawn as validation sites; each partition has its own set of maps.",
+          paste(vapply(partitions, function(p) basename(p$csv), character(1)), collapse = ", "))
+}
 
 page <- glue::glue('<!DOCTYPE html>
 <html lang="en">
@@ -201,12 +249,11 @@ page <- glue::glue('<!DOCTYPE html>
   <div class="wrap">
     <h1>Trees Outside Forests: LRR {llr_id} sample design</h1>
     <p class="lede">Where we are looking for trees outside forests across Land Resource Region {llr_id},
-       and which sites are used to train and check the detection model.</p>
+       and which sites are used to train and validate the detection model.</p>
     <ul class="stats">
       <li><b>{n_cells}</b><span>sampled 1 km cells</span></li>
       <li><b>{n_mlra}</b><span>Major Land Resource Areas</span></li>
-      <li><b>{n_train}</b><span>training sites</span></li>
-      <li><b>{n_valid}</b><span>validation sites</span></li>
+      {site_stats}
     </ul>
   </div>
 </header>
@@ -221,7 +268,7 @@ page <- glue::glue('<!DOCTYPE html>
     <p>Because we cannot classify every image, we work from a sample. LRR {llr_id} is divided into its
        {n_mlra} Major Land Resource Areas (MLRAs), and within each MLRA a set of 1 km grid cells is
        drawn for imagery acquisition and classification. The maps on this page show that sample and
-       the ground-truth sites that anchor it.</p>
+       the sites that anchor it. {partition_note}</p>
     <p>The workflow lives in the
        <a href="https://github.com/GeospatialCentroid/treesOutsideForests">treesOutsideForests</a>
        repository: annual forest and urban masks from NLCD and the Census, NAIP acquisition and
@@ -231,8 +278,8 @@ page <- glue::glue('<!DOCTYPE html>
   <section class="prose">
     <h2>How to read the maps</h2>
     <ul class="legend">
-      <li style="--sw:#4a3aa7">Training site: a ground-truth 1 km cell used to fit the model.</li>
-      <li style="--sw:#e34948">Validation site: a ground-truth cell held back to test the model.</li>
+      <li style="--sw:#4a3aa7">Training site: a 1 km scene used to fit the model.</li>
+      <li style="--sw:#e34948">Validation site: a scene held back from training to check the model.</li>
       <li style="--sw:#4a4843">Sampled 1 km cell: drawn for NAIP acquisition (outlines appear when zoomed in).</li>
       <li style="--sw:#f2d3e0">MLRA fill: pale colour per Major Land Resource Area; hover for its name.</li>
       <li style="--sw:#eda100">Census places {ctx_year}: incorporated places, hidden until switched on.</li>
@@ -242,25 +289,12 @@ page <- glue::glue('<!DOCTYPE html>
        labels giving the cell id and MLRA. The print version is the same map as a single PNG.</p>
   </section>
 
-  <section>
-    <h2>Whole region</h2>
-    <div class="grid">
-      {sub("<article class=\\"card\\">", "<article class=\\"card feature\\">", lrr_card)}
-    </div>
-  </section>
-
-  <section>
-    <h2>By Major Land Resource Area</h2>
-    <div class="grid">
-      {paste(mlra_cards, collapse = "\\n")}
-    </div>
-  </section>
+{sections}
 </main>
 
 <footer>
   <div class="wrap">
-    Built {built} from commit <code>{commit}</code>. Training and validation sites are the June 2026
-    ground-truth cells inside LRR {llr_id}, split at random (seed {cfg_smp$seed}).
+    Built {built} from commit <code>{commit}</code>. {partition_note}
     Source: <a href="https://github.com/GeospatialCentroid/treesOutsideForests">GeospatialCentroid/treesOutsideForests</a>.
   </div>
 </footer>
