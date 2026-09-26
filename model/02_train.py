@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Train the U-Net on the prepared pairs, then score the test split.
 
-    model/tools/run_guarded.sh model/.venv/bin/python model/02_train.py [--run-name NAME] [--epochs N]
+    model/tools/run_guarded.sh model/.venv/bin/python model/02_train.py [--run-name NAME] [--epochs N] [--seed S]
 
 One folder per run under model.paths.runs_dir holding: config.json (every
 setting that shaped the run), history.csv (per-epoch loss and validation
@@ -28,17 +28,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from tofunet.config import available_gb, load_config, memory_guard, pick_device, process_rss_gb, setup_logging, tof_path  # noqa: E402
 from tofunet.data import PatchDataset, balanced_subset, index_patches, load_manifest, load_stats  # noqa: E402
 from tofunet.metrics import ThresholdSweep  # noqa: E402
-from tofunet.model import BCEDiceLoss, build_model, save_checkpoint  # noqa: E402
+from tofunet.model import BCEDiceLoss, build_loss, build_model, save_checkpoint  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--run-name", default=None)
 ap.add_argument("--epochs", type=int, default=None)
 ap.add_argument("--limit-train-patches", type=int, default=None, help="cap patches per epoch (smoke tests)")
 ap.add_argument("--device", default=None, help="auto (default from config), cpu, cuda or cuda:N")
+ap.add_argument("--seed", type=int, default=None, help="override model.seed (seed-spread runs, TESTING_PLAN.md step 6)")
+ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                help="override a top-level model.* config key for this run (YAML value: --set encoder=resnet50 "
+                     "--set min_tree_fraction=0.015 --set 'train_years=[2012,2016,2020]'); recorded in config.json")
 args = ap.parse_args()
 
 cfg = load_config()
 cm = cfg["model"]
+import yaml as _yaml
+overrides = {}
+for kv in args.set:
+    key, _, val = kv.partition("=")
+    if not _ or key not in cm:
+        sys.exit(f"--set {kv}: '{key}' is not a model.* key in config.yml")
+    overrides[key] = _yaml.safe_load(val)
+cm.update(overrides)
 work = tof_path(cm["paths"]["work_dir"])
 pairs_dir = work / "pairs"
 run_name = args.run_name or f"{datetime.now():%Y%m%d_%H%M%S}_{cm['encoder']}"
@@ -47,6 +59,7 @@ run_dir.mkdir(parents=True, exist_ok=True)
 log = setup_logging(run_dir / "train.log")
 epochs = args.epochs or int(cm["epochs"])
 
+if args.seed is not None: cm["seed"] = int(args.seed)
 torch.manual_seed(int(cm["seed"])); np.random.seed(int(cm["seed"]))
 torch.set_num_threads(int(cm["threads"]))
 device, device_desc = pick_device(args.device or cm.get("device", "auto"))
@@ -61,6 +74,11 @@ mean, std = np.array(stats["mean"]), np.array(stats["std"])
 size = int(cm["patch_size"])
 
 splits = {s: ok[ok["split"] == s].reset_index(drop=True) for s in ("train", "validation", "test")}
+if cm.get("train_years"):   # H10: train on chosen imagery years only; validation and test keep every year
+    keep = [int(y) for y in cm["train_years"]]
+    before = len(splits["train"])
+    splits["train"] = splits["train"][splits["train"]["year"].astype(int).isin(keep)].reset_index(drop=True)
+    log.info("train_years %s: %d of %d training pairs kept", keep, len(splits["train"]), before)
 for s, df in splits.items():
     if len(df) == 0 and s != "test":
         log.error("No %s pairs in the manifest; check the partition and 01_prepare.py.", s); sys.exit(1)
@@ -76,7 +94,8 @@ n_bg = sum(p.tree_fraction == 0.0 for p in train_pool)
 log.info("Patch pool: train %d (%d with trees, %d without), validation %d; indexed in %.0f s",
          len(train_pool), n_tree, n_bg, len(val_patches), time.time() - t0)
 
-train_ds = PatchDataset(splits["train"], pairs_dir, [], mean, std, augment=True, seed=int(cm["seed"]))
+train_ds = PatchDataset(splits["train"], pairs_dir, [], mean, std, augment=True, seed=int(cm["seed"]),
+                        augment_level=str(cm.get("augment", "standard")))
 val_ds = PatchDataset(splits["validation"], pairs_dir, val_patches, mean, std, augment=False)
 for ds in (train_ds, val_ds):
     ds.set_patch_size(size)
@@ -86,14 +105,15 @@ val_loader = DataLoader(val_ds, batch_size=int(cm["batch_size"]), shuffle=False,
 model = build_model(cm["encoder"], cm.get("encoder_weights")).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
-criterion = BCEDiceLoss()
+criterion = build_loss(cm)
+log.info("loss %s, augmentation %s", type(criterion).__name__ if cm.get("loss", "bce_dice") == "bce_dice" else cm["loss"], cm.get("augment", "standard"))
 optimizer = torch.optim.AdamW(model.parameters(), lr=float(cm["learning_rate"]), weight_decay=float(cm["weight_decay"]))
 
 run_cfg = {k: v for k, v in cm.items() if k != "paths"} | {
     "run_name": run_name, "epochs_requested": epochs, "band_stats": stats, "n_parameters": n_params,
     "train_pairs": len(splits["train"]), "validation_pairs": len(splits["validation"]), "test_pairs": len(splits["test"]),
     "train_patch_pool": len(train_pool), "train_patches_with_trees": n_tree, "validation_patches": len(val_patches),
-    "torch": torch.__version__, "device": device_desc, "mixed_precision": use_amp,
+    "torch": torch.__version__, "device": device_desc, "mixed_precision": use_amp, "overrides": overrides,
     "started": datetime.now().isoformat(timespec="seconds")}
 with open(run_dir / "config.json", "w") as f:
     json.dump(run_cfg, f, indent=2)

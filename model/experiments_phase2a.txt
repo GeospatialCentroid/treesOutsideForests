@@ -1,0 +1,9 @@
+# Phase 2, config-only single-factor runs against B0 (seed 1 throughout; compare with 20260926_B0_base_s1 and the seed spread).
+# H10: train on target-year imagery only; validation and test keep every year
+20260926_H10_target_only_s1|--seed 1 --set train_years=[2012,2016,2020]
+# H5b: the partner's patch rule (drop training windows under 1.5 % trees) and a 3:1 background ratio
+20260926_H5b_min015_s1|--seed 1 --set min_tree_fraction=0.015
+20260926_H5b_bg3_s1|--seed 1 --set background_ratio=3
+# H8: a deeper encoder, and larger patches (stride scaled with them)
+20260926_H8_resnet50_s1|--seed 1 --set encoder=resnet50
+20260926_H8_patch512_s1|--seed 1 --set patch_size=512 --set train_stride=256 --set eval_stride=512

@@ -31,21 +31,14 @@ This is where the weighting bites. MLRA 55D has the highest TOF share but is sma
 
 ┌────────────┬──────────┬────────────────┬────────┬───────────────┐
 │    MLRA    │ estimate │ MLRA area, km² │ weight │ TOF area, km² │
+├────────────┼──────────┼────────────────┼────────┼───────────────┤
+│ 55D (64)   │ 4.01 %   │ 7,923          │ 0.022  │ 317           │
+├────────────┼──────────┼────────────────┼────────┼───────────────┤
+│ 54 (60)    │ 1.39 %   │ 75,965         │ 0.207  │ 1,055         │
+├────────────┼──────────┼────────────────┼────────┼───────────────┤
+│ 52 (56)    │ 2.51 %   │ 58,666         │ 0.160  │ 1,471         │
+├────────────┼──────────┼────────────────┼────────┼───────────────┤
+│ LRR F      │ 2.01 %   │ 366,491        │ 1.000  │ 7,372         │
+└────────────┴──────────┴────────────────┴────────┴───────────────┘
 
-  /clear                        Start a new session with empty context; previous session stays on disk (resumable with /resume)
-  /code-review                  3 free /ultrareview · Review the current diff, or a PR number/branch/path target, for correctness bugs and reuse/simplification/efficiency cleanups at the
-                                given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings; ultra: deep multi-agent revie…
-  /simplify                     Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use
-                                given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings; ultra: deep multi-agent revie…
-  /simplify                     Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use
-                                given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings; ultra: deep multi-agent revie…
-  /simplify                     Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use
-                                given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings; ultra: deep multi-agent revie…
-  /simplify                     Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use                              given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings; ultra: deep multi-agent revie…
-  /simplify                     Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use                              given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings; ultra: deep multi-agent revie…
-  /simplify                     Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use                              given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings; ultra: deep multi-agent revie…
-  /simplify                     Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use                              given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings; ultra: deep multi-agent revie…
-  /simplify                     Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use
-                                given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may include uncertain findings; ultra: deep multi-agent revie…
-  /simplify                     Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use
-                                given effort level (low/medium: fewer, high-confidence findings; high→max: broader coverage, may inclu
+Summed over the eleven strata, the 2020 synthetic run gives 7,372 km² of TOF on 366,491 km² of land: 2.01 percent of the LRR, with a standard error of 0.04 percentage points. The figures come from estimates_mlra_lrr_F.csv, strataAreas_lrr_F_2020.csv and estimates_lrr_F.csv in data/estimates/.

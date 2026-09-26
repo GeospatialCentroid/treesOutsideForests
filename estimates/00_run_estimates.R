@@ -10,7 +10,18 @@
 #             paths$model_dir); the mask year for a cell is the year NAIP was
 #             actually captured (status.json actual_year).
 # The stratum areas always use the target year's masks.
-# Outputs (ignored by git), under estimates$paths$out_dir:
+#
+# Command-line overrides (Rscript estimates/00_run_estimates.R --key=value), for
+# running a model's rasters on a chosen set of cells (TESTING_PLAN.md step 4):
+#   --cells=<csv>          cell list with id, MLRA_ID, LLR_ID instead of the sample list
+#   --model-dir=<dir>      raster folder (implies model_source raster)
+#   --pattern=<pattern>    raster name pattern, default estimates$model_pattern
+#   --years-from=rasters   take (id, year) from the raster names instead of the naip
+#                          status.json files; target_year is the nearest naip target year
+#   --eligible-from=model|mask   default estimates$eligible_from
+#   --out=<dir>            write outputs here (stratum-area caches are still read from
+#                          estimates$paths$out_dir when present)
+# Outputs (ignored by git), under estimates$paths$out_dir (or --out):
 #   cellAreas_lrr_<LRR>_mask_<year>.csv   raster mode: mask areas per sampled cell, per mask year (cached)
 #   strataAreas_lrr_<LRR>_<year>.csv      MLRA total and eligible areas per mask year (cached)
 #   cells_lrr_<LRR>_<target>.csv          cell-year table with the model output joined
@@ -31,25 +42,48 @@ cfg_est <- cfg$estimates
 llr_id  <- cfg_est$llr_id
 crs     <- cfg$crs
 target_years <- as.integer(cfg_est$target_years)
-model_source <- match.arg(cfg_est$model_source, c("table", "raster"))
+
+# --key=value arguments from Rscript; absent when the script is source()d.
+cli <- grep("^--", commandArgs(trailingOnly = TRUE), value = TRUE)
+arg_or <- function(key, default = NULL) {
+  hit <- grep(paste0("^--", key, "="), cli, value = TRUE)
+  if (length(hit) == 0) return(default)
+  sub(paste0("^--", key, "="), "", hit[length(hit)])
+}
+opt_cells      <- arg_or("cells")
+opt_model_dir  <- arg_or("model-dir")
+opt_pattern    <- arg_or("pattern", cfg_est$model_pattern)
+opt_years_from <- match.arg(arg_or("years-from", "status"), c("status", "rasters"))
+opt_eligible   <- match.arg(arg_or("eligible-from", cfg_est$eligible_from), c("mask", "model"))
+opt_out        <- arg_or("out")
+
+model_source <- if (!is.null(opt_model_dir)) "raster" else match.arg(cfg_est$model_source, c("table", "raster"))
 masks_dir <- tof_path(cfg_est$paths$masks_outputs)
-out_dir   <- tof_path(cfg_est$paths$out_dir)
+cache_dir <- tof_path(cfg_est$paths$out_dir)                 # stratum-area caches live here
+out_dir   <- if (is.null(opt_out)) cache_dir else tof_path(opt_out)
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 # --- Inputs -------------------------------------------------------------------
 mlra <- sf::st_read(tof_path(cfg$reference$mlra_gpkg), quiet = TRUE) |>
   dplyr::filter(LRRSYM == llr_id) |> sf::st_transform(crs)
 g100 <- sf::st_read(tof_path(cfg$reference$grid_gpkg), quiet = TRUE)
-sample_tbl <- read_sites_csv(tof_path(cfg_est$paths$sample_csv)) |> dplyr::filter(LLR_ID == llr_id)
+cells_csv  <- if (is.null(opt_cells)) tof_path(cfg_est$paths$sample_csv) else tof_path(opt_cells)
+sample_tbl <- read_sites_csv(cells_csv) |> dplyr::filter(LLR_ID == llr_id)
 
 cells <- cell_geometry(sample_tbl, g100, crs)
-message(sprintf("LRR %s: %d cells in %d MLRAs (%d duplicate ids kept in their first MLRA).",
-                llr_id, nrow(cells), dplyr::n_distinct(cells$MLRA_ID), nrow(sample_tbl) - nrow(cells)))
+message(sprintf("LRR %s: %d cells in %d MLRAs from %s (%d duplicate ids kept in their first MLRA).",
+                llr_id, nrow(cells), dplyr::n_distinct(cells$MLRA_ID), basename(cells_csv),
+                nrow(sample_tbl) - nrow(cells)))
 
-cached <- function(path, build) {
+# Cached tables: read from out_dir, or from the main estimates folder for the
+# stratum areas (the same MLRA polygons whatever the cell list); write to out_dir.
+cached <- function(path, build, shared = FALSE) {
+  alt <- file.path(cache_dir, basename(path))
   if (file.exists(path)) return(readr::read_csv(path, show_col_types = FALSE))
+  if (shared && file.exists(alt)) return(readr::read_csv(alt, show_col_types = FALSE))
   x <- build(); readr::write_csv(x, path); x
 }
+nearest_target <- function(y) target_years[apply(abs(outer(as.integer(y), target_years, "-")), 1, which.min)]
 layers_for <- function(y) mask_layers(masks_dir, llr_id, y, crs)
 
 # --- Cell-year table with the model output -----------------------------------
@@ -61,9 +95,26 @@ if (model_source == "table") {
   cell_year <- join_model_table(cells, tab)
   mask_years <- sort(unique(cell_year$target_year))
 } else {
-  model_dir <- tof_path(cfg_est$paths$model_dir)
-  years <- naip_year_table(tof_path(cfg_est$paths$naip_export_dir)) |>
-    dplyr::filter(target_year %in% target_years)
+  model_dir <- if (is.null(opt_model_dir)) tof_path(cfg_est$paths$model_dir) else tof_path(opt_model_dir)
+  if (opt_years_from == "rasters") {
+    # (id, year) from the raster names. The labelled scenes were fetched with the
+    # mask year as the target year, so status.json cannot tell a fallback year;
+    # each raster year is assigned to the nearest naip target year instead.
+    rx <- paste0("^", gsub("\\{year\\}", "([0-9]{4})", gsub("\\{id\\}", "(.+)", gsub(".", "\\.", opt_pattern, fixed = TRUE), fixed = FALSE), fixed = FALSE), "$")
+    files <- list.files(model_dir, pattern = rx)
+    m <- regmatches(files, regexec(rx, files))
+    years <- tibble::tibble(id = vapply(m, `[`, "", 2), actual_year = as.integer(vapply(m, `[`, "", 3))) |>
+      dplyr::filter(id %in% cells$id) |>
+      dplyr::mutate(target_year = nearest_target(actual_year)) |>
+      dplyr::arrange(id, target_year, abs(actual_year - target_year)) |>
+      dplyr::distinct(id, target_year, .keep_all = TRUE)
+    message(sprintf("%d rasters matching %s in %s for %d of %d cells; actual years %s.", nrow(years), opt_pattern,
+                    model_dir, dplyr::n_distinct(years$id), nrow(cells),
+                    paste(names(table(years$actual_year)), table(years$actual_year), sep = ":", collapse = " ")))
+  } else {
+    years <- naip_year_table(tof_path(cfg_est$paths$naip_export_dir)) |>
+      dplyr::filter(target_year %in% target_years)
+  }
   mask_years <- sort(unique(c(years$actual_year, years$target_year)))
   cell_area_tbl <- purrr::map_dfr(mask_years, function(y) cached(
     file.path(out_dir, sprintf("cellAreas_lrr_%s_mask_%d.csv", llr_id, y)),
@@ -74,7 +125,7 @@ if (model_source == "table") {
     cy <- dplyr::inner_join(cy, dplyr::select(cell_area_tbl, -cell_m2),
                             by = c("id", "MLRA_ID", "actual_year" = "mask_year"))
     message(sprintf("Target %d: %d cells with imagery (%d without).", ty, nrow(cy), nrow(cells) - nrow(cy)))
-    join_model_output(cy, model_dir, cfg_est$model_pattern, eligible_from = cfg_est$eligible_from)
+    join_model_output(cy, model_dir, opt_pattern, eligible_from = opt_eligible)
   })
 }
 for (ty in sort(unique(cell_year$target_year))) {
@@ -83,9 +134,10 @@ for (ty in sort(unique(cell_year$target_year))) {
 }
 
 # --- Stratum areas from the target-year masks, cached -------------------------
-strata_tbl <- purrr::map_dfr(mask_years, function(y) cached(
+strata_years <- if (opt_years_from == "rasters") sort(unique(cell_year$target_year)) else mask_years
+strata_tbl <- purrr::map_dfr(strata_years, function(y) cached(
   file.path(out_dir, sprintf("strataAreas_lrr_%s_%d.csv", llr_id, y)),
-  function() { message("Stratum areas, ", y); stratum_areas(mlra, layers_for(y)) }))
+  function() { message("Stratum areas, ", y); stratum_areas(mlra, layers_for(y)) }, shared = TRUE))
 
 # --- Estimates ----------------------------------------------------------------
 mlra_est <- estimate_mlra(cell_year) |>

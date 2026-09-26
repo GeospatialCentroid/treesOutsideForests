@@ -30,7 +30,7 @@ masks:
 
 # ----------------------------------------------------------------- naip/ ----
 naip:
-  target_region: "both"                 # "F", "G", or "both"
+  target_region: "F"                    # LRR G is out of scope; no G imagery is fetched
   target_years: ["2012", "2016", "2020"]
   buffer_dist_m: 250                    # 250 m around the 1 km grid = 1.5 km window
   run_snic: false
@@ -71,6 +71,17 @@ sampling:
     map_dir:         "data/sampling/maps"
     derived_dir:     "data/sampling/derived"      # cached, coarsened context layers
     masks_outputs:   "data/masks/outputs/llr_masks" # products of the masks/ stage
+  # Evaluation panel (04_draw_evaluation_panel.R; model/TESTING_PLAN.md 3.1): a
+  # seeded random draw of n_per_mlra sampled cells per MLRA plus spare_frac
+  # extra, excluding the labelled (mask) cells and the partner's change-trend
+  # cells. Tranche 1 is the first tranche1 cells per MLRA, fetched first.
+  panel:
+    seed: 909
+    n_per_mlra: 90
+    spare_frac: 0.10
+    tranche1: 50
+    exclude_change_trends: "data/naip/aois_showing_change_trends.csv"
+    out_csv: "data/reference/sampleGrids/evaluationPanel_lrr_F_09_2026.csv"
   # Systematic sample grid (00_draw_sample_grid.R): about n_per_mlra 1 km cells
   # per MLRA, one seeded regular-lattice draw per MLRA. These values reproduce
   # the May 2026 reference lists byte-for-byte; sampling/test/ checks that.
@@ -187,9 +198,14 @@ model:
   patch_size: 256
   train_stride: 128        # training patches overlap by half
   eval_stride: 256         # validation and test patches tile the scene
+  train_years: null        # null = every imagery year; a list such as [2012, 2016, 2020] trains on those years only (H10)
   min_tree_fraction: 0.0   # a training patch counts as a tree patch with any tree pixel; sparse trees are the point
   background_ratio: 1.0    # background patches kept per tree patch (balances the sample)
   # Training (02_train.py)
+  loss: "bce_dice"         # bce_dice (half BCE, half soft Dice) | tversky | focal_tversky (H5a); with tversky_beta and focal_gamma
+  tversky_beta: 0.7        # above 0.5 weights false positives more than misses
+  focal_gamma: 1.33        # focal_tversky only
+  augment: "standard"      # standard (flips, turns, mild gain/bias) | strong (H1c: wide gain/bias, per-band gamma) | blur_scale (H4) | strong_blur_scale (both)
   encoder: "resnet34"      # any segmentation_models_pytorch encoder
   encoder_weights: "imagenet"
   batch_size: 16

@@ -1,0 +1,12 @@
+# Phase 3: the adopted phase 2 arms combined (10.11: H8 ResNet-50, H5a Tversky 0.7, H1c strong
+# augmentation, H4 blur/scale, H5b 1.5 % rule and background ratio 3). Runs after phase 2c.
+# P3_full: every adopted arm together, three seeds (the candidate).
+20260927_P3_full_s1|--seed 1 --set encoder=resnet50 --set loss=tversky --set tversky_beta=0.7 --set augment=strong_blur_scale --set min_tree_fraction=0.015 --set background_ratio=3
+20260927_P3_full_s2|--seed 2 --set encoder=resnet50 --set loss=tversky --set tversky_beta=0.7 --set augment=strong_blur_scale --set min_tree_fraction=0.015 --set background_ratio=3
+20260927_P3_full_s3|--seed 3 --set encoder=resnet50 --set loss=tversky --set tversky_beta=0.7 --set augment=strong_blur_scale --set min_tree_fraction=0.015 --set background_ratio=3
+# Ablations, seed 1: the same without the deeper encoder (is ResNet-50 worth 45 min a run?),
+# without background ratio 3 (does it add anything once the 1.5 % rule is in?), and the two
+# augmentation arms alone on the B0 recipe (do they add up?).
+20260927_P3_no_r50_s1|--seed 1 --set loss=tversky --set tversky_beta=0.7 --set augment=strong_blur_scale --set min_tree_fraction=0.015 --set background_ratio=3
+20260927_P3_no_bg3_s1|--seed 1 --set encoder=resnet50 --set loss=tversky --set tversky_beta=0.7 --set augment=strong_blur_scale --set min_tree_fraction=0.015
+20260927_P3_aug_both_s1|--seed 1 --set augment=strong_blur_scale

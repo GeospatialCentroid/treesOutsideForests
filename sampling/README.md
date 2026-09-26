@@ -11,6 +11,7 @@ assignment built on top of that list.
 | `01_map_lrr_sites.R` | Whole-LRR sample design map (static and web), one pair per partition. |
 | `02_map_mlra_sites.R` | One map pair per MLRA and partition. |
 | `03_build_site.R` | Assembles the GitHub Pages site in `docs/`. |
+| `04_draw_evaluation_panel.R` | Draws the evaluation panel for the model testing plan: a seeded random sample of about 90 sampled cells per MLRA plus 10 % spare, excluding the labelled cells and the partner's change-trend cells, in two tranches. Tracked output `data/reference/sampleGrids/evaluationPanel_lrr_F_09_2026.csv`; settings under `sampling$panel`. |
 | `test/test_sample_grid_replication.R` | Redraws the grid and checks it against the tracked May 2026 lists, byte for byte. |
 | `tools/derive_frame_corrections.R` | One-off, needs the old neymanSampling grid: builds the frame-corrections table described below. Not part of the pipeline. |
 

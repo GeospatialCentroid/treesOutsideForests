@@ -1,0 +1,8 @@
+# Phase 2, code-level single-factor runs (seed 1; compare with 20260926_B0_base_s1 and the seed spread).
+# H5a: losses that weight false positives (area bias on empty scenes)
+20260926_H5a_tversky07_s1|--seed 1 --set loss=tversky --set tversky_beta=0.7
+20260926_H5a_focaltversky_s1|--seed 1 --set loss=focal_tversky --set tversky_beta=0.7 --set focal_gamma=1.33
+# H1c: stronger radiometric augmentation (wide gain and bias, per-band gamma)
+20260926_H1c_strongaug_s1|--seed 1 --set augment=strong
+# H4: blur and rescale augmentation for the 0.6 m to 1 m resolution change
+20260926_H4_blurscale_s1|--seed 1 --set augment=blur_scale

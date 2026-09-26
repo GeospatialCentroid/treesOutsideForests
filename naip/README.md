@@ -25,6 +25,15 @@ The entire scraping and processing lifecycle is managed by a single entry point:
 
 ---
 
+## Fetching a list of cells (naip/src/fetch_cells.R)
+
+`Rscript naip/src/fetch_cells.R --cells=<csv> [--tranche=1] [--years=2012,2016,2020] [--workers=6]`
+runs the per-cell worker for every cell in a CSV (an `id` column, optionally a
+`tranche` column) and every target year, with the tight 1 km export on, skipping
+cell-years whose status.json already says Success. Used for the evaluation
+panel (`data/reference/sampleGrids/evaluationPanel_lrr_F_09_2026.csv`). A report
+with one row per (cell, year) is written beside the export folder.
+
 ## Configuration (config.yml)
 
 The pipeline reads the `naip` section of the root `config.yml`, plus the shared
@@ -36,7 +45,7 @@ reference:
   mlra_gpkg: "data/reference/lower48MLRA.gpkg"     # MLRA boundaries (LRR F/G)
 
 naip:
-  target_region: "both"          # "F", "G", or "both"
+  target_region: "F"             # LRR G is out of scope
   target_years: ["2012", "2016", "2020"]
   buffer_dist_m: 250             # 250 m around the 1 km grid = 1.5 km window
   run_snic: false

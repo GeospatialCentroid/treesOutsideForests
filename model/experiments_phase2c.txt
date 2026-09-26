@@ -1,0 +1,7 @@
+# Phase 3 candidates from the H5b arms (both adopted, 10.11): confirm the 1.5 % rule with two more seeds,
+# and combine it with background ratio 3 over three seeds. Config-only.
+20260926_H5b_min015_s2|--seed 2 --set min_tree_fraction=0.015
+20260926_H5b_min015_s3|--seed 3 --set min_tree_fraction=0.015
+20260926_P3_min015_bg3_s1|--seed 1 --set min_tree_fraction=0.015 --set background_ratio=3
+20260926_P3_min015_bg3_s2|--seed 2 --set min_tree_fraction=0.015 --set background_ratio=3
+20260926_P3_min015_bg3_s3|--seed 3 --set min_tree_fraction=0.015 --set background_ratio=3

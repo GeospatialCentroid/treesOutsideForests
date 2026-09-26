@@ -15,6 +15,7 @@ every MLRA and the LRR). Settings live in the `estimates` section of the root
 | Script | What it does |
 |--------|--------------|
 | `00_run_estimates.R` | Driver: cell list, model output (table or rasters), stratum areas per target year (cached), MLRA and LRR estimates, all written to `estimates$paths$out_dir`. |
+| `tools/compare_model_truth.R` | Model estimates against truth estimates from two `00_run_estimates.R` output folders (see [Running a model's rasters](#running-a-models-rasters-on-a-chosen-set-of-cells)). |
 | `01_aoi_areas.R` | The sampled cells clipped to the MLRA that drew them, with total, masked and eligible area per target year against the combined mask. See [Clipped AOIs](#clipped-aois). |
 | `02_placeholder_tof.R` | Placeholder TOF per clipped AOI and year, calibrated to each MLRA's NLCD forest share, packaged as the partner spreadsheet. See [Placeholder for partners](#placeholder-for-partners). |
 | `functions/areas.R` | `mask_layers()`, `polygon_mask_areas()`, `cell_geometry()`, `cell_areas()`, `stratum_areas()`; against the combined mask: `combined_mask()`, `mask_area_m2()`, `clip_cells_to_mlra()`. |
@@ -41,6 +42,34 @@ Rscript estimates/03_montecarlo_replicates.R     # 50,000 replicates per AOI for
 Rscript estimates/test/test_replicate_estimators.R
 Rscript estimates/04_replicate_estimates.R       # estimates for every replicate and their summaries (about 2 minutes)
 ```
+
+## Running a model's rasters on a chosen set of cells
+
+`00_run_estimates.R` accepts `--key=value` arguments from `Rscript` (ignored
+when the script is `source()`d), so the model stage's evaluation suite can push
+a run's rasters through the real estimator on the labelled cells
+(`model/TESTING_PLAN.md`, step 4):
+
+```sh
+Rscript estimates/00_run_estimates.R --cells=<csv> --model-dir=<dir> --pattern="tof_{id}_{year}.tif" \
+    --years-from=rasters --eligible-from=model --out=<dir>
+Rscript estimates/tools/compare_model_truth.R <model_out_dir> <truth_out_dir> <out_csv>
+```
+
+| argument | effect |
+|---|---|
+| `--cells=<csv>` | a cell list with `id`, `MLRA_ID`, `LLR_ID` (a roles CSV works) instead of the sample list |
+| `--model-dir=<dir>` | raster folder; implies `model_source: raster` |
+| `--pattern=<pattern>` | raster name pattern with `{id}` and `{year}`; default `estimates$model_pattern` |
+| `--years-from=rasters` | take `(id, year)` from the raster names rather than the naip `status.json` files, and assign each year to the nearest target year (2011 to 2012, 2015 to 2016, 2019 to 2020). Needed for the labelled cells, whose exports were fetched with the mask year as the target year. |
+| `--eligible-from=model` | the raster's non-NA area is the eligible denominator (the suite burns the combined mask into model and truth rasters alike, so this makes them share pixels exactly) |
+| `--out=<dir>` | write outputs here; the stratum-area caches are still read from `estimates$paths$out_dir` |
+
+`tools/compare_model_truth.R` joins two such runs (a model's rasters and the
+reference masks written in the same format) and reports, per MLRA and LRR,
+year and denominator, both estimates, the difference in percentage points,
+the ratio of TOF areas, and whether the difference exceeds two truth standard
+errors.
 
 ## Clipped AOIs
 

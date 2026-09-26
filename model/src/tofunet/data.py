@@ -76,7 +76,8 @@ class PatchDataset(Dataset):
     per band, optionally augmented. Returns (image float32 (4,S,S), mask float32 (1,S,S))."""
 
     def __init__(self, manifest: pd.DataFrame, pairs_dir: Path, patches: list[Patch],
-                 mean: np.ndarray, std: np.ndarray, augment: bool = False, seed: int = 0):
+                 mean: np.ndarray, std: np.ndarray, augment: bool = False, seed: int = 0,
+                 augment_level: str = "standard"):
         self.keys = list(manifest["key"])
         self.pairs_dir = Path(pairs_dir)
         self.patches = patches
@@ -84,6 +85,9 @@ class PatchDataset(Dataset):
         self.mean = np.asarray(mean, dtype=np.float32).reshape(4, 1, 1)
         self.std = np.asarray(std, dtype=np.float32).reshape(4, 1, 1)
         self.augment = augment
+        if augment_level not in ("standard", "strong", "blur_scale", "strong_blur_scale"):
+            raise ValueError(f"augment_level {augment_level!r}: use standard, strong, blur_scale or strong_blur_scale")
+        self.augment_level = augment_level
         self.rng = np.random.default_rng(seed)
         self._img: dict[int, np.ndarray] = {}
         self._mask: dict[int, np.ndarray] = {}
@@ -125,10 +129,37 @@ class PatchDataset(Dataset):
             img, mask = np.rot90(img, k, axes=(1, 2)), np.rot90(mask, k)
         # Radiometric jitter on every band: NAIP exposure differs between
         # flights and years, and the model should not key on absolute levels.
-        gain = rng.uniform(0.85, 1.15, size=(4, 1, 1)).astype(np.float32)
-        bias = rng.uniform(-0.08, 0.08, size=(4, 1, 1)).astype(np.float32)
-        img = np.clip(img * gain + bias, 0.0, 1.0)
-        return img, mask
+        if self.augment_level in ("strong", "strong_blur_scale"):
+            # H1c: wider gain and bias, plus a per-band gamma, so the model sees
+            # the range of vendor stretches the KS drift between years shows.
+            gain = rng.uniform(0.7, 1.3, size=(4, 1, 1)).astype(np.float32)
+            bias = rng.uniform(-0.12, 0.12, size=(4, 1, 1)).astype(np.float32)
+            gamma = rng.uniform(0.7, 1.4, size=(4, 1, 1)).astype(np.float32)
+            img = np.clip(np.clip(img, 0.0, 1.0) ** gamma * gain + bias, 0.0, 1.0)
+        else:
+            gain = rng.uniform(0.85, 1.15, size=(4, 1, 1)).astype(np.float32)
+            bias = rng.uniform(-0.08, 0.08, size=(4, 1, 1)).astype(np.float32)
+            img = np.clip(img * gain + bias, 0.0, 1.0)
+        if self.augment_level in ("blur_scale", "strong_blur_scale"):
+            # H4: 2018-onward NAIP is 0.6 m resampled to 1 m, so crowns are
+            # smoother than in 2010 to 2016 imagery. Half the patches get a 3x3
+            # blur, half a random rescale by 0.8 to 1.25 (nearest neighbour,
+            # cropped or reflect-padded back to size), the mask following.
+            if rng.random() < 0.5:
+                k = np.ones((3, 3), dtype=np.float32) / 9.0
+                pad = np.pad(img, ((0, 0), (1, 1), (1, 1)), mode="reflect")
+                img = sum(k[a, b] * pad[:, a:a + img.shape[1], b:b + img.shape[2]] for a in range(3) for b in range(3))
+            if rng.random() < 0.5:
+                f = float(rng.uniform(0.8, 1.25)); S = img.shape[1]
+                n = max(int(round(S / f)), 8)                       # source window that maps onto S output pixels
+                r0 = int(rng.integers(0, max(S - n, 0) + 1)); c0 = int(rng.integers(0, max(S - n, 0) + 1))
+                if n <= S:
+                    src_i, src_m = img[:, r0:r0 + n, c0:c0 + n], mask[r0:r0 + n, c0:c0 + n]
+                else:                                               # zoom out: reflect-pad, then sample
+                    e = n - S; src_i = np.pad(img, ((0, 0), (0, e), (0, e)), mode="reflect"); src_m = np.pad(mask, ((0, e), (0, e)), mode="reflect")
+                idx = np.minimum((np.arange(S) * n / S).astype(int), n - 1)
+                img = src_i[:, idx][:, :, idx]; mask = src_m[idx][:, idx]
+        return np.ascontiguousarray(img, dtype=np.float32), np.ascontiguousarray(mask, dtype=np.float32)
 
 
 def balanced_subset(patches: list[Patch], min_tree_fraction: float, background_ratio: float,

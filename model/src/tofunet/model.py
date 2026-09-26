@@ -29,6 +29,34 @@ class BCEDiceLoss(nn.Module):
         return 0.5 * self.bce(logits, target) + 0.5 * self.dice(logits, target)
 
 
+class TverskyLoss(nn.Module):
+    """Half BCE, half Tversky (beta above 0.5 weights false positives more than
+    false negatives), optionally focal (gamma above 1 sharpens on hard patches).
+    With beta 0.5 and gamma 1 the Tversky half is the soft Dice of BCEDiceLoss."""
+
+    def __init__(self, beta: float = 0.7, gamma: float = 1.0, bce_weight: float = 0.5):
+        super().__init__()
+        self.bce = nn.BCEWithLogitsLoss()
+        self.tversky = smp.losses.TverskyLoss(mode="binary", from_logits=True, alpha=1.0 - beta, beta=beta, gamma=gamma)
+        self.w = bce_weight
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return self.w * self.bce(logits, target) + (1.0 - self.w) * self.tversky(logits, target)
+
+
+def build_loss(cm: dict) -> nn.Module:
+    """The training loss from config keys: loss = bce_dice (default) | tversky |
+    focal_tversky, with tversky_beta and focal_gamma."""
+    name = str(cm.get("loss", "bce_dice"))
+    if name == "bce_dice":
+        return BCEDiceLoss()
+    if name == "tversky":
+        return TverskyLoss(beta=float(cm.get("tversky_beta", 0.7)), gamma=1.0)
+    if name == "focal_tversky":
+        return TverskyLoss(beta=float(cm.get("tversky_beta", 0.7)), gamma=float(cm.get("focal_gamma", 1.33)))
+    raise ValueError(f"unknown loss {name!r}: use bce_dice, tversky or focal_tversky")
+
+
 def save_checkpoint(path: Path, model: nn.Module, meta: dict) -> None:
     state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
     torch.save({"state_dict": state, "meta": meta}, path)
