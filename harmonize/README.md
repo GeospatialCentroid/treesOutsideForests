@@ -20,6 +20,7 @@ Settings live in the `harmonize` section of the root `config.yml`.
 Rscript harmonize/0_run.R                                  # every cell in the export tree (about three minutes for 336 cells, 6 workers)
 Rscript harmonize/0_run.R 1549-3-5-13-2 1613-4-15-13-3     # only these cells
 Rscript harmonize/0_run.R --mode=reference --reference=2020 --out=data/naip/harmonized_ref2020
+Rscript harmonize/0_run.R --mode=year --years=2015 --out=data/naip/harmonized_y2015 <id> ...   # remap only the 2015 imagery
 ```
 
 Then point the model at the harmonised tree instead of the raw one:
@@ -47,6 +48,9 @@ For every cell, the years are the export folders `aoi_<id>_<year>` holding a
   is linked as is.
 - **reference**: every year but the reference (`reference_year`, `latest` or a
   year) is remapped to it.
+- **year**: only the imagery years named in `--years` are remapped, each to
+  the cell's most recent other year, with no gate. Built for the
+  late-season 2015 imagery of Minnesota and Montana (see below).
 
 Remapping is empirical CDF matching: 256 quantiles of every valid pixel in the
 target and reference images give a per-band lookup table over 0 to 255, applied
@@ -99,3 +103,19 @@ gain; it would be if the model were trained on harmonised pairs as well
 (01_prepare.py would read the harmonised tree), which keeps the option worth
 having. The step is off by default: nothing reads the harmonised tree unless
 `--harmonized` is passed.
+
+## The targeted test (September 2026)
+
+The evaluation panel showed every model predicting a third to a half fewer
+trees on the September / October 2015 imagery of Minnesota and Montana than
+on the same cells' July 2011 and 2019 imagery (`model/TESTING_PLAN.md`
+10.12). `year` mode remapped only that 2015 imagery to each cell's 2019
+image for the 165 tranche 1 cells that carry it (`data/naip/harmonized_y2015`),
+and `model/tools/harmonize_year_test.sh` re-predicted those cells from the
+harmonised tree. For one recipe (blur / rescale augmentation) the parkland
+dip halved (-6.3 to -3.4 pp on a 15 pp level); for the baseline it did not
+move; for both, a dip appeared in a neighbouring MLRA that had none, and the
+number of cells more than 20 % below their own level rose. Histogram
+matching moves the 2015 image toward a July look, but the trees in it are
+still leaf-off. Not adopted as a production step; the remaining remedy is
+on the training side (`model/STATUS.md`, section 3).

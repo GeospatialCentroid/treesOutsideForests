@@ -93,6 +93,16 @@ n_tree = sum(p.tree_fraction > float(cm["min_tree_fraction"]) for p in train_poo
 n_bg = sum(p.tree_fraction == 0.0 for p in train_pool)
 log.info("Patch pool: train %d (%d with trees, %d without), validation %d; indexed in %.0f s",
          len(train_pool), n_tree, n_bg, len(val_patches), time.time() - t0)
+if float(cm.get("late_season_weight", 1)) > 1:   # H2: late-season (leaf-off) scenes count several times in the pool
+    import pandas as _pd
+    w = int(round(float(cm["late_season_weight"]))); months = {int(m) for m in cm.get("late_season_months", [9, 10])}
+    meta = _pd.read_csv(work / "scene_meta.csv", dtype={"key": str})
+    late_keys = set(meta.loc[meta["capture_month"].isin(months), "key"])
+    late_pairs = {i for i, k in enumerate(splits["train"]["key"]) if k in late_keys}
+    extra = [p for p in train_pool if p.pair in late_pairs]
+    train_pool = train_pool + extra * (w - 1)
+    log.info("late_season_weight %d: %d training pairs captured in months %s, %d patches counted %d times (pool now %d)",
+             w, len(late_pairs), sorted(months), len(extra), w, len(train_pool))
 
 train_ds = PatchDataset(splits["train"], pairs_dir, [], mean, std, augment=True, seed=int(cm["seed"]),
                         augment_level=str(cm.get("augment", "standard")))

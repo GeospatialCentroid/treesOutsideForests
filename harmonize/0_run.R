@@ -24,6 +24,7 @@
 #   Rscript harmonize/0_run.R              # every cell in the export tree
 #   Rscript harmonize/0_run.R <id> [<id>]  # only these cells
 #   Rscript harmonize/0_run.R --mode=reference --reference=2020 --out=data/naip/harmonized_ref2020 [<id> ...]
+#   Rscript harmonize/0_run.R --mode=year --years=2015 --out=data/naip/harmonized_y2015 [<id> ...]   # remap only 2015 imagery
 # ==============================================================================
 source(here::here("shared/R/setup.R"))
 pacman::p_load(terra, furrr, future, jsonlite, readr, dplyr)
@@ -35,11 +36,13 @@ ch  <- cfg$harmonize
 export_dir <- tof_path(ch$paths$export_dir)
 overwrite  <- isTRUE(ch$overwrite)
 
-# Optional overrides: --mode=reference --reference=2020 --out=<dir>, then cell ids.
+# Optional overrides: --mode=reference|year --reference=2020 --years=2015[,2019] --out=<dir>, then cell ids.
 args <- commandArgs(trailingOnly = TRUE)
 opts <- args[grepl("^--", args)]; args <- args[!grepl("^--", args)]
 opt <- function(name, default) { v <- sub(paste0("^--", name, "="), "", opts[grepl(paste0("^--", name, "="), opts)]); if (length(v)) v[1] else default }
 ch$mode <- opt("mode", ch$mode); ch$reference_year <- opt("reference", ch$reference_year)
+ch$target_years <- if (nzchar(opt("years", ""))) strsplit(opt("years", ""), ",")[[1]] else ch$target_years
+if (ch$mode == "year" && length(ch$target_years) == 0) stop("--mode=year needs --years=<year>[,<year>]")
 out_dir <- tof_path(opt("out", ch$paths$out_dir)); dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 ids <- if (length(args) > 0) args else {
   unique(sub("^aoi_(.+)_\\d{4}$", "\\1", list.files(export_dir, pattern = "^aoi_.+_\\d{4}$")))
@@ -47,7 +50,7 @@ ids <- if (length(args) > 0) args else {
 if (!is.null(ch$cells) && length(args) == 0) ids <- intersect(ids, as.character(ch$cells))
 
 message(sprintf("Harmonising %d cells (%s mode, reference %s, KS on %s, threshold %.2f and %.1fx the consensus distance, %d quantiles) -> %s",
-                length(ids), ch$mode, ch$reference_year, paste(ch$eval_bands, collapse = "+"),
+                length(ids), ch$mode, if (ch$mode == "year") paste("most recent non-", paste(ch$target_years, collapse = "/"), " year", sep = "") else ch$reference_year, paste(ch$eval_bands, collapse = "+"),
                 ch$ks_threshold, ch$ks_relative, ch$n_quantiles, out_dir))
 
 future::plan(future::multisession, workers = ch$workers)
@@ -57,7 +60,8 @@ rows <- furrr::future_map(ids, function(id) {
   tryCatch(
     harmonize_cell(id, export_dir, out_dir, mode = ch$mode, reference_year = ch$reference_year,
                    bands = ch$eval_bands, sample_size = ch$ks_sample, threshold = ch$ks_threshold,
-                   relative = ch$ks_relative, n_quantiles = ch$n_quantiles, overwrite = overwrite),
+                   relative = ch$ks_relative, n_quantiles = ch$n_quantiles, overwrite = overwrite,
+                   target_years = ch$target_years),
     error = function(e) data.frame(id = id, year = NA_character_, action = "error", reference_year = NA_character_,
                                    ks_to_reference = NA_real_, mode = ch$mode, note = conditionMessage(e),
                                    timestamp = format(Sys.time(), "%Y-%m-%d %H:%M:%S"), stringsAsFactors = FALSE))

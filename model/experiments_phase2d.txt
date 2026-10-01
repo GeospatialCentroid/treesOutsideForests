@@ -1,0 +1,6 @@
+# Phase 2d, after phase 3: H2 late-season arm. The 2016 dip on the panel is September/October 2015
+# imagery (10.12, 10.14); the training set has 25 September/October pairs of 258. Up-weight them.
+20260927_H2a_late3_s1|--seed 1 --set late_season_weight=3
+20260927_H2a_late6_s1|--seed 1 --set late_season_weight=6
+# The same on top of the phase 3 recipe (the candidate), one seed.
+20260927_H2a_late3_P3_s1|--seed 1 --set late_season_weight=3 --set encoder=resnet50 --set loss=tversky --set tversky_beta=0.7 --set augment=strong_blur_scale --set min_tree_fraction=0.015 --set background_ratio=3

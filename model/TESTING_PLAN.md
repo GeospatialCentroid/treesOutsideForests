@@ -1,7 +1,10 @@
 # Model testing plan: finding the best trees-outside-forest model for LRR F
 
 Draft 2026-09-25, for review. Everything in section 1 is measured from the
-repository as it stands tonight; sections 2 to 8 are the proposal.
+repository as it stood that night; sections 2 to 8 are the proposal as
+written then. **Sections 9 to 11 are the dated log of what was then done and
+found; `STATUS.md` beside this file is the short, current summary and the
+place to start.** The programme was paused on 28 September 2026 (11.4).
 
 The question the plan answers is not "which run has the best validation F1"
 but "which model gives the most trustworthy estimate of trees outside forests,
@@ -1201,3 +1204,254 @@ Anything launched from a terminal on `ubuntu-gpu` must be started with
 `setsid nohup ... < /dev/null &`; the two runner scripts skip finished runs
 and reuse rasters, so a rerun after an interruption resumes rather than
 repeats.
+
+### 10.14 Queued behind the chain (2026-09-26, 23:30)
+
+Three more pieces run unattended tonight, all detached:
+
+- **Targeted harmonisation of the 2015 imagery** (the remedy the 20 % rule
+  points at in 10.12). `harmonize/0_run.R` gained `--mode=year --years=2015`:
+  only the named imagery year is remapped, to the cell's most recent other
+  year, with no KS gate. It ran on the 165 tranche 1 cells that carry 2015
+  imagery (MLRA 53A 50, 56B 50, 52 45, 56A 18, 53B 1, 54 1; their stacks are
+  2010 or 2011, 2015, 2019, so the reference is the 2019 image) into
+  `data/naip/harmonized_y2015`. `06_predict_panel.py --export-dir --out-name`
+  then re-predicts those cells for `H4_blurscale_s1` and `B0_base_s1` from
+  the harmonised tree into `<run>/panel_h2015/`, and
+  `tools/compare_panel_variants.py` sets the 2016 dip (2016 share minus the
+  mean of 2012 and 2020) raw against harmonised, per MLRA. Driver:
+  `tools/harmonize_year_test.sh`; log `runs/harmonize_year_test.log`.
+  Decision rule: if the parkland (56B) 2016 share recovers to within the
+  seed spread of its 2012 / 2020 mean without the other MLRAs moving,
+  targeted harmonisation of fallback-year imagery becomes a production
+  step and the late-season training arm (H2) is deferred; if not, H2 runs.
+- **`tools/after_chain.sh`** waits for the phase 2c / 3 chain and the panel
+  runs, then writes `compare_P3_full.csv` and `compare_P3_ablations.csv`
+  through `compare_runs.py` and predicts the **whole panel** (both
+  tranches, 990 cells) for the three `P3_full` seeds and `B0_base_s1` into
+  `<run>/panel_full/` (`run_panel.sh --out-name`), leaving the tranche 1
+  results untouched. About 10 GB per run.
+- The tranche 1 panel for the four adopted single-factor arms
+  (`panel_adopted.out`, 10.13).
+
+**Result of the 2015 harmonisation test (23:30).** 165 cells remapped
+(2015 to each cell's 2019 image), 330 years linked. Mean predicted tree
+share (pp) on the 160 cells with all three target years, raw against
+harmonised, same model and threshold:
+
+| model | MLRA | cells | 2012 | 2016 raw | 2016 harmonised | 2020 | dip raw | dip harmonised |
+|---|---|---|---|---|---|---|---|---|
+| H4 blur/scale s1 | all | 160 | 5.29 | 3.45 | 4.41 | 5.83 | -2.11 | -1.15 |
+| H4 blur/scale s1 | 56B parkland | 50 | 13.94 | 8.39 | 11.32 | 15.50 | -6.34 | -3.40 |
+| H4 blur/scale s1 | 53A | 50 | 0.68 | 0.38 | 0.64 | 0.71 | -0.32 | -0.05 |
+| H4 blur/scale s1 | 52 | 40 | 0.12 | 0.04 | 0.15 | 0.10 | -0.07 | +0.04 |
+| H4 blur/scale s1 | 56A | 18 | 6.11 | 6.26 | 5.58 | 6.55 | -0.07 | -0.75 |
+| B0 s1 | all | 160 | 5.53 | 3.69 | 3.69 | 5.64 | -1.90 | -1.90 |
+| B0 s1 | 56B parkland | 50 | 14.78 | 9.10 | 9.44 | 15.01 | -5.79 | -5.46 |
+| B0 s1 | 56A | 18 | 6.13 | 6.31 | 5.18 | 6.14 | +0.17 | -0.96 |
+
+- **The decision rule says H2 runs.** For the blur/scale model, harmonising
+  halves the parkland dip (-6.3 to -3.4 pp, still a quarter of the level)
+  and removes it in 53A and 52; for the B0 model it does nothing (56B 9.1
+  to 9.4). In both models it *creates* a dip in 56A (-0.75 and -0.96 pp),
+  and the count of cells more than 20 % below their own 2012 / 2020 mean
+  rises (47 to 59, and 48 to 76). Histogram matching moves the 2015 image
+  toward a July look, but the trees in it are still leaf-off, and what the
+  model does with that depends on the recipe. Not a production step on its
+  own; a partial remedy for a robust model at best.
+- **Why: the 2015 imagery is all September and October** (capture months
+  of the 165 cells: 2015 is 9 or 10 for 159; the 2011 and 2019 images are
+  June to August for nearly all). This is phenology, not sensor stretch.
+  The labelled set has 25 September / October training pairs of 258, 5
+  validation, 11 test.
+- **H2 as queued** (`model/experiments_phase2d.txt`, after phase 3,
+  through `tools/after_phase3.sh`): `late_season_weight` (new `model.*`
+  key; patches from scenes captured in `late_season_months` [9, 10] are
+  counted that many times in the epoch pool) at 3 and 6 on the B0 recipe,
+  and at 3 on the phase 3 recipe. Each gets the suite, the tranche 1 panel
+  and the 2015-harmonisation test, so the parkland 2016 share is read with
+  and without harmonisation. Judged on the panel dip first, the labelled
+  metrics second.
+- **If up-weighting is not enough** (25 scenes may simply be too few
+  leaf-off examples), the next arm is temporal pseudo-labelling on the
+  panel: the model's own July-imagery prediction of a cell, where its two
+  other years agree, becomes the label for that cell's September image.
+  That turns the 165 unlabelled late-season cells into training data
+  without a single new mask, and is the H7/H12 territory the plan already
+  allows. Not started.
+
+Storage after the test: the harmonised 2015 tree is 1.2 GB; the share has
+204 GB free with phase 3 and the whole-panel runs still to land.
+
+## 11. Phase 3 results and what runs next (2026-09-27)
+
+### 11.1 The chain finished; the waiter did not
+
+Phase 2c and phase 3 trained and scored overnight without error (11 runs,
+last one done at 05:56). `tools/after_chain.sh` and `tools/after_phase3.sh`
+never fired: their `pgrep -f` pattern matched the shells that had launched
+the jobs, whose command lines quote the runner names, so they waited all day.
+Both were killed at 15:50 and replaced by `tools/post_chain_20260927.sh`
+(whole panel for the `P3_full` seeds and B0 s1, then phase 2d, then its
+panels and harmonisation test) and `tools/post_chain_20260927b.sh` (phase 3b
+after it; its wait is anchored to a command line that *starts* with the
+runner's name). Rule for any future waiter: anchor the pattern with `^` or
+wait on a PID file, never on a substring.
+
+### 11.2 Phase 3: the combination is no better than its best parts
+
+Held-out scenes, calibrated threshold, primary = share MAE + delta MAE in pp.
+`P3_full` = ResNet-50 + Tversky 0.7 + `strong_blur_scale` + 1.5 % rule +
+background ratio 3. Seed spread of `P3_full` (2 sd, calibrated): F1 0.006,
+area bias 0.006, share MAE 0.012, delta MAE 0.011, false change 0.037.
+
+| run | seeds | F1 pooled | area bias | share MAE, pp | delta MAE, pp | false change p90, pp | primary |
+|---|---|---|---|---|---|---|---|
+| B0 s1 | 1 | 0.804 | 0.980 | 0.154 | 0.172 | 0.35 | 0.326 |
+| P3_full | 3 (mean) | 0.809 | 0.989 | 0.146 | 0.151 | 0.30 | 0.297 |
+| P3_no_bg3 (full minus background 3) | 1 | **0.814** | 1.020 | **0.133** | 0.143 | 0.32 | **0.276** |
+| P3_no_r50 (full minus ResNet-50) | 1 | 0.808 | 0.994 | 0.147 | 0.156 | 0.32 | 0.303 |
+| P3_aug_both (both augmentations on B0) | 1 | 0.806 | 0.984 | 0.154 | 0.167 | 0.40 | 0.321 |
+| P3_min015_bg3 (the two H5b arms) | 3 (mean) | 0.798 | 0.989 | 0.150 | 0.152 | 0.37 | 0.302 |
+| H5a Tversky alone | 1 | 0.803 | 0.988 | 0.139 | **0.132** | **0.27** | **0.271** |
+| H8 ResNet-50 alone | 1 | 0.807 | 0.977 | 0.137 | 0.143 | 0.31 | 0.280 |
+| H4 blur/scale alone | 1 | 0.811 | 1.001 | 0.137 | 0.148 | 0.31 | 0.285 |
+
+- **`P3_full` beats B0** on every metric, beyond the B0 seed spread on delta
+  MAE (0.021 better) and false change (0.05), at the spread on share MAE. It
+  is the first three-seed result that does, and its own seed spread is
+  tight (share MAE sd 0.006). But it does **not** beat Tversky alone,
+  ResNet-50 alone or blur/scale alone (primary 0.271 to 0.285 against
+  0.297). The arms do not add.
+- **Background ratio 3 hurts in combination.** Removing it (`P3_no_bg3`)
+  gives the best pooled F1 of any run (0.814) and the best share MAE
+  (0.133), beyond `P3_full`'s spread on both; only its uncalibrated bias is
+  worse (1.02, and the recommended calibration is the stored threshold). The
+  1.5 % rule and background 3 were both adopted from one seed each and were
+  flagged in 10.11 as teaching the same lesson; together with the Tversky
+  loss, which already penalises false positives, the extra background is too
+  much.
+- **The two augmentations together are no gain** on the B0 recipe (0.321
+  against 0.326), although each alone was (0.298, 0.285). Strong radiometric
+  jitter and blur/rescale on the same patch is more distortion than the
+  model benefits from. `P3_full` and `P3_no_bg3` both carry
+  `strong_blur_scale`; the lean recipe with `blur_scale` alone is untested.
+- **ResNet-50 earns its 45 minutes**: dropping it costs 0.027 on the primary
+  metric, beyond the spread.
+- **Stored thresholds saturate at 0.90 for every Tversky run** (the trainer's
+  grid ends there): the Tversky term pushes probabilities toward 1. The
+  calibrated pass is the one to read, as 10.8 already said.
+
+**Phase 3b queued** (`experiments_phase3b.txt`, after phase 2d): two more
+seeds of `P3_no_bg3`, and `P3b_lean` = ResNet-50 + Tversky 0.7 + `blur_scale`
++ 1.5 % rule, three seeds. Each then gets the tranche 1 panel. The
+candidate is whichever of the two beats Tversky-alone's 0.271 with three
+seeds; if neither does, Tversky alone with ResNet-50 is the fallback
+(`P3_no_bg3` minus the augmentation, not yet run).
+
+### 11.3 Tranche 1 panel across ten runs: the parkland dip is everywhere
+
+Mean predicted tree share over the 545 tranche 1 cells (pp of the cell), the
+parkland (56B) share, its 2016 dip against the cell's own 2012 / 2020 mean,
+and self-consistency **at one fixed floor of 0.3 pp** (the per-run floor the
+summary uses is the run's own false-change p90, which makes the summary's
+percentages incomparable across runs; T5 should report a fixed floor too):
+
+| run | LRR 2012 / 2016 / 2020 | 56B 2012 / 2016 / 2020 | 56B dip | pairs above 0.3 pp | target-only | fallback | mean 2012 to 2016 delta | 2012 to 2020 |
+|---|---|---|---|---|---|---|---|---|
+| CPU baseline | 2.61 / 2.00 / 2.60 | 13.5 / 7.1 / 13.3 | -6.3 | 21.3 % | 17.0 | 31.1 | -0.61 | -0.01 |
+| B0 s1 | 2.71 / 2.20 / 2.75 | 14.8 / 9.1 / 15.0 | -5.8 | 22.2 % | 18.2 | 31.3 | -0.52 | +0.04 |
+| B0 s2 | 2.82 / 2.37 / 2.87 | 14.9 / 10.4 / 15.9 | -5.0 | 23.4 % | 19.7 | 31.9 | -0.45 | +0.05 |
+| B0 s3 | 2.93 / 2.59 / 2.90 | 16.7 / 13.5 / 16.3 | -3.0 | 22.4 % | 18.5 | 31.3 | -0.34 | -0.02 |
+| H1c strong aug | 2.69 / 2.37 / 2.76 | 14.4 / 11.2 / 14.9 | -3.5 | 21.2 % | 17.4 | 30.1 | -0.33 | +0.06 |
+| H4 blur/scale | 2.69 / 2.12 / 2.81 | 13.9 / 8.4 / 15.5 | -6.3 | 21.1 % | 17.3 | 29.9 | -0.57 | +0.12 |
+| H5a Tversky | 2.74 / 2.39 / 2.83 | 15.1 / 11.5 / 15.7 | -4.0 | 22.4 % | 18.2 | 32.3 | -0.35 | +0.08 |
+| H5b background 3 | 2.83 / 2.37 / 2.78 | 15.8 / 11.0 / 15.5 | -4.7 | 21.3 % | 17.0 | 31.1 | -0.47 | -0.05 |
+| H5b 1.5 % rule | 2.63 / 2.01 / 2.64 | 13.4 / 7.5 / 14.0 | -6.2 | 21.4 % | 17.3 | 30.9 | -0.61 | +0.01 |
+| H8 ResNet-50 | 2.74 / 2.49 / 2.83 | 15.4 / 12.6 / 16.0 | -3.1 | 22.5 % | 18.7 | 31.3 | -0.25 | +0.09 |
+
+- **No recipe removes the dip**; it runs from -3.0 pp (B0 s3, ResNet-50) to
+  -6.3 (CPU baseline, blur/scale, 1.5 % rule) on a 14 to 16 pp level. The
+  seed-to-seed range inside B0 (-3.0 to -5.8) is as wide as the range across
+  recipes, so a single-seed panel dip is not a recipe property.
+- **The labelled set and the panel disagree about H4.** Blur/scale was the
+  arm that most improved the labelled 2015 scenes (10.11), and it has the
+  deepest panel dip. The 15 labelled 2015 pairs are plains cells; the panel's
+  2015 cells are parkland and Montana. The labelled set cannot judge the
+  leaf-off problem; the panel can, and 11.2's candidate choice should weigh
+  the panel dip of the three-seed runs (coming with phase 3b) as much as the
+  labelled primary metric.
+- **Consistency at a fixed floor is flat across recipes**: 21 to 23 % of
+  year pairs move more than 0.3 pp, 17 to 20 % of target-year pairs, 30 to
+  32 % of pairs with a fallback year. Every recipe inherits the same
+  imagery problem; this is what H2 (phase 2d, queued) and, failing that,
+  temporal pseudo-labelling are for.
+- **The 2012 to 2020 change is within +/- 0.12 pp of zero for every run**, so
+  the target-year estimate is stable in the mean; the 2016 figure is the
+  one that cannot be quoted yet.
+
+Storage at 16:00: work share 176 GB free, `data/model/runs` 98 GB over 31
+runs (about 1.4 GB suite plus 5.7 GB tranche 1 panel each). The whole-panel
+passes add about 10 GB per run for four runs; phases 2d and 3b about 8 runs
+more. Expect about 100 GB free by tomorrow; pruning the rejected runs'
+rasters (`H8_patch512`, `H10_target_only`, the CPU baseline's panel) would
+recover about 20 GB when wanted.
+
+### 11.4 Phases 2d and 3b done: the lean recipe is the candidate (2026-09-28)
+
+Every queue finished at 07:07 on 28 September (the workflow was frozen for
+six hours on the evening of the 27th with `tools/pause_gpu_work.sh` while the
+GPU served a language model, and resumed without loss). Held-out scenes,
+calibrated threshold, three seeds each unless marked; primary = share MAE +
+delta MAE in pp.
+
+| recipe | seeds | F1 pooled | area bias | share MAE, pp | delta MAE, pp | false change p90, pp | primary |
+|---|---|---|---|---|---|---|---|
+| B0 | 3 | 0.805 | 0.987 | 0.150 | 0.169 | 0.41 | 0.319 |
+| P3_full (all six arms) | 3 | 0.809 | 0.989 | 0.146 | 0.151 | 0.30 | 0.297 |
+| P3_no_bg3 (full minus background 3) | 3 | 0.810 | 0.998 | 0.143 | 0.153 | 0.30 | 0.296 |
+| **P3b_lean** (ResNet-50 + Tversky 0.7 + `blur_scale` + 1.5 % rule) | 3 | **0.812** | 1.005 | **0.136** | **0.142** | 0.32 | **0.278** |
+| H2a late-season weight 3 (B0 recipe) | 1 | 0.797 | 0.999 | 0.155 | 0.141 | 0.38 | 0.296 |
+| H2a late-season weight 6 (B0 recipe) | 1 | 0.797 | 0.985 | 0.171 | 0.162 | 0.50 | 0.333 |
+| H2a weight 3 on P3_full | 1 | 0.800 | 0.976 | 0.167 | 0.181 | 0.40 | 0.348 |
+
+- **`P3b_lean` is the candidate.** It beats `P3_full` by 0.019 on the
+  primary metric with three seeds on each side, against a seed spread of
+  about 0.012, and has the best pooled F1 of any three-seed recipe. The
+  single-seed `P3_no_bg3` result of 11.2 (0.276) was a good seed: its
+  three-seed mean is 0.296, the same as `P3_full`. Dropping the strong
+  radiometric jitter and keeping blur / rescale is what the two extra
+  seeds confirmed. Tversky alone (0.271, one seed) has not been given three
+  seeds and remains the only single-arm result that is nominally better;
+  worth three seeds before the choice is final, but it lacks the encoder
+  and augmentation that carry the panel numbers below.
+- **Late-season up-weighting fails the guardrail.** Both weights drop
+  pooled F1 to 0.797, below the B0 lower bound of 0.803, and weight 6 is
+  worse on everything. Weight 3 does cut delta MAE (0.141), but on the
+  panel its parkland dip (-3.0 pp) is inside the B0 seed range (-3.0 to
+  -5.8), and applying the 2015 harmonisation on top changes nothing
+  (-3.0 to -3.0). Twenty-five leaf-off scenes counted three or six times
+  is not more leaf-off information. H2a is **rejected**; the temporal
+  pseudo-labelling arm of 10.14 is the next thing to try for the
+  phenology problem, and the only untried one.
+- **The lean recipe also has the smallest panel dip of any three-seed
+  recipe.** Tranche 1 estimator, LRR percent of all land, 2012 / 2016 /
+  2020: `P3b_lean` 1.25 / 1.21 / 1.28, 1.27 / 1.25 / 1.30 and 1.23 / 1.14 /
+  1.25 (2016 dip 0.04 to 0.10 pp); B0 seeds 0.09 to 0.17 pp; `P3_no_bg3`
+  0.10 to 0.15 pp. Not zero, and inside the seed spread, but consistently
+  the shallowest.
+- **The whole panel (978 cells with exports) lowers the LRR level.**
+  `P3_full` seeds and B0 s1 on all 978 cells: 2012 1.05 to 1.13 %, 2016
+  0.98 to 1.07 %, 2020 1.14 to 1.19 % of all land, sampling SE 0.085 to
+  0.095 pp, against 1.25 to 1.35 % on tranche 1 alone. Tranche 2 drew
+  emptier cells; the tranche 1 figures in 10.12 and 11.3 are for comparing
+  recipes, not for quoting a level. The 2012 to 2020 change on the whole
+  panel is +0.03 to +0.10 pp in every run, about one sampling SE.
+
+**Next, in order:** (1) whole panel and the 2015 harmonisation test for the
+three `P3b_lean` seeds; (2) Tversky-alone with three seeds, as the
+control the choice still lacks; (3) `test44` robustness on the chosen
+recipe, which needs `01_prepare.py` to take a partition and work directory
+so the `test34` pairs are not overwritten; (4) temporal pseudo-labelling for
+the leaf-off imagery. Storage: about 75 GB free on the share after phase 3b;
+pruning is now due before (1) adds 33 GB.

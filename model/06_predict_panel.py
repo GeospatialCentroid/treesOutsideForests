@@ -57,6 +57,9 @@ ap.add_argument("--batch-size", type=int, default=8)
 ap.add_argument("--device", default=None)
 ap.add_argument("--limit", type=int, default=None, help="first N cells (smoke test)")
 ap.add_argument("--repredict", action="store_true")
+ap.add_argument("--export-dir", default=None, help="read imagery from this export tree instead of config naip.paths.export_dir "
+                                                  "(e.g. a harmonised tree with the same layout)")
+ap.add_argument("--out-name", default="panel", help="output folder under the run (default panel); use another name for a variant")
 ap.add_argument("--false-change-floor-pp", type=float, default=None,
                 help="pp of predicted change above which a stable cell counts as false change; default: the run's held-out "
                      "false_change_p90_pp from suite/scorecard.json, else 0.3")
@@ -65,7 +68,7 @@ args = ap.parse_args()
 t_start = time.time()
 cfg = load_config(); cm = cfg["model"]; cn = cfg["naip"]
 run_dir = tof_path(args.run)
-out_dir = run_dir / "panel"; pred_dir = out_dir / "predictions"
+out_dir = run_dir / args.out_name; pred_dir = out_dir / "predictions"
 pred_dir.mkdir(parents=True, exist_ok=True)
 log = setup_logging(out_dir / "panel.log")
 torch.set_num_threads(int(cm["threads"]))
@@ -88,15 +91,15 @@ if args.tranche:
 panel = panel.drop_duplicates("id")
 if args.limit:
     panel = panel.head(args.limit)
-export_dir = tof_path(cn["paths"]["export_dir"])
+export_dir = tof_path(args.export_dir or cn["paths"]["export_dir"])
 target_years = [int(y) for y in cn["target_years"]]
 masks_dir = tof_path(cfg["estimates"]["paths"]["masks_outputs"])
 combined = CombinedMask(masks_dir, cm["llr_id"])
 harm_path = tof_path(cfg["harmonize"]["paths"]["out_dir"]) / "harmonization_log.csv"
 harm = pd.read_csv(harm_path, dtype={"id": str}) if harm_path.exists() else None
 tags = {"model_run": meta["run_name"], "encoder": meta["encoder"], "threshold": threshold, "calibration": calibration}
-log.info("Run %s on %s, threshold %.2f (%s): %d panel cells from %s%s", meta["run_name"], device_desc, threshold, calibration,
-         len(panel), cells_csv.name, f" (tranche {args.tranche})" if args.tranche else "")
+log.info("Run %s on %s, threshold %.2f (%s): %d panel cells from %s%s; imagery from %s -> %s", meta["run_name"], device_desc, threshold, calibration,
+         len(panel), cells_csv.name, f" (tranche {args.tranche})" if args.tranche else "", export_dir, out_dir.name)
 
 
 def read_status(folder: Path) -> dict:

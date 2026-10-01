@@ -10,7 +10,7 @@ Pipeline for estimating trees outside forests (TOF) by USDA Land Resource Region
 | `sampling/` | Systematic sample grid draw, sample design maps and site-role assignment | new; grid draw ported from neymanSampling; agroforestrySampling to follow |
 | `estimates/` | Area-weighted TOF estimates per MLRA and LRR from the per-cell model output | new |
 | `harmonize/` | Optional radiometric harmonisation of the NAIP exports across years (KS-gated quantile matching), a second export tree the model can read | ported from neymanSampling |
-| `model/` | U-Net tree / no-tree model: NAIP fetch for the reference masks, training, evaluation, prediction (CPU PyTorch) | new; reference scripts in `U-Net/` and `agroforestry_trainingValidation/scripts/` |
+| `model/` | U-Net tree / no-tree model: NAIP fetch for the reference masks, training, the evaluation suite, the evaluation panel, prediction (PyTorch, CPU or GPU). `model/STATUS.md` is the current state of the model testing programme, `model/TESTING_PLAN.md` its plan and log | new; reference scripts in `U-Net/` and `agroforestry_trainingValidation/scripts/` |
 
 Each stage keeps its own README. This file covers what is shared.
 

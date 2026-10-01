@@ -15,8 +15,13 @@ AMD GPU (ROCm) from the same code, chosen by `model.device` in `config.yml`.
 | `03_evaluate.py` | Re-scores a run on any split at any threshold, with a per-scene table. |
 | `04_predict.py` | Tree maps (probability + binary GeoTIFF) for any 4-band NAIP scene, seamless sliding-window inference. `--harmonized` reads the `harmonize/` tree instead of the raw exports. |
 | `05_evaluate_suite.py` | The evaluation suite (testing plan section 4): predicts each held-out scene once with `predict_scene`, writes `<run>/suite/predictions/` (probability raster, and `tof_<id>_<year>.tif` / `tof_truth_<id>_<year>.tif` in the estimator's 1 / 0 / 255 format with the masks-stage combined mask burned in), then scores T0 pixel (strict and boundary-tolerant), T1 area on eligible land and T2 change per cell and year pair, with bootstrap intervals and metadata slices, into `scorecard.json`, `t0_scenes.csv`, `t1_scenes.csv`, `t2_changes.csv`; appends a row to `data/model/runs/registry.csv`. Device-agnostic; existing probability rasters are reused unless `--repredict`. |
-| `06_predict_panel.py` | Predicts the evaluation panel (unlabelled cells, `sampling.panel.out_csv`) with one run: `<run>/panel/predictions/` holds the probability and estimator-format rasters per cell-year, `panel_cells.csv` the predicted shares with the export's year, month and states, and `panel_summary.json` the T5 self-consistency numbers (change between target years against the run's false-change floor, and the cells the 20 % rule would flag for harmonisation). `--calibration` applies a calibration.json threshold. |
-| `tools/run_panel.sh` | For each run: `06_predict_panel.py` calibrated, then the estimator on the panel rasters (`estimates/00_run_estimates.R --cells ... --model-dir ...`) into `<run>/panel/estimates/` (T3b). |
+| `06_predict_panel.py` | Predicts the evaluation panel (unlabelled cells, `sampling.panel.out_csv`) with one run: `<run>/panel/predictions/` holds the probability and estimator-format rasters per cell-year, `panel_cells.csv` the predicted shares with the export's year, month and states, and `panel_summary.json` the T5 self-consistency numbers (change between target years against the run's false-change floor, and the cells the 20 % rule would flag for harmonisation). `--calibration` applies a calibration.json threshold; `--tranche` restricts to one tranche; `--export-dir` reads another export tree with the same layout (a harmonised one); `--out-name` writes to `<run>/<name>/` instead of `<run>/panel/`. |
+| `tools/run_panel.sh` | For each run: `06_predict_panel.py` calibrated, then the estimator on the panel rasters (`estimates/00_run_estimates.R --cells ... --model-dir ...`) into `<run>/panel/estimates/` (T3b). `--tranche N` for one tranche, `--out-name panel_full` for a whole-panel pass that leaves the tranche 1 results in place. |
+| `tools/compare_panel_variants.py` | Sets a run's panel predictions against a variant of them made from other imagery (`--variant panel_h2015`): mean predicted share per target year and the 2016 dip per MLRA, reference against variant. |
+| `tools/harmonize_year_test.sh` | The targeted-harmonisation test (plan 10.14): remaps only the 2015 imagery of the tranche 1 cells that carry it (`harmonize/0_run.R --mode=year --years=2015`), re-predicts those cells for the given runs from the harmonised tree and compares with their raw panel predictions. |
+| `tools/pause_gpu_work.sh`, `tools/resume_gpu_work.sh` | Freeze / thaw every detached model job on the host (SIGSTOP / SIGCONT on the runner process groups) so the GPU can be borrowed; nothing is killed and jobs continue from the same step. |
+| `tools/post_chain_20260927*.sh` | The pattern for chaining steps after a queue: plain sequential scripts, started detached (`setsid nohup ... < /dev/null &`). Do not wait on process names; a substring match catches the shell that launched the job. |
+| `experiments_phase*.txt` | The experiment queues run so far (phase 2a to 2d, 3, 3b), one `<run_name>|<02_train.py arguments>` line per run; the record of exactly what every run in the registry was trained with. |
 | `src/tofunet/suite/` | The suite's pieces: `rasters.py` (mask window, combined mask on the scene grid, GeoTIFF writers), `metrics.py` (counts, relaxed F1, threshold sweep), `stats.py` (scene and change statistics, bootstrap). |
 | `tools/compare_harmonized.py` | Scores a run on the masked scenes the `harmonize/` step remapped, raw against harmonised, pooled for training and held-out scenes (the table in `harmonize/README.md`). |
 | `tools/build_scene_meta.py` | One row per prepared pair, joined from the manifest, the partner's partition CSV, the roles CSV, the export's `status.json` and the harmonise log: split, MLRA, cover and transition class, actual year, off-target flag, capture month, states, item ids, harmoniser action. Writes `data/model/scene_meta.csv` (testing plan step 1). |
@@ -29,10 +34,12 @@ AMD GPU (ROCm) from the same code, chosen by `model.device` in `config.yml`.
 | `tools/run_guarded.sh` | Runs a command under a hard memory ceiling (user cgroup) with a memory log. |
 | `tools/memwatch.sh` | The memory logger the guard uses. |
 
-Settings live in the `model` section of the root `config.yml`. `TESTING_PLAN.md`
-is the draft plan for the model testing programme: the evaluation panel, the
-metric tiers built around the area and change estimates, and the experiment
-ledger of remote-sensing assumptions to test.
+Settings live in the `model` section of the root `config.yml`. **`STATUS.md`
+is the current account of the model testing programme**: what was built, what
+improved the model and by how much, the candidate recipe, the unresolved
+phenology problem and the next steps. `TESTING_PLAN.md` is the long version:
+the plan (sections 1 to 8) and the dated log of every step and result
+(sections 9 to 11).
 
 ## Running
 
@@ -101,12 +108,17 @@ Scenes absent from the partition are excluded. With `test34` that is 86 train,
 - **Patches.** 256 x 256 windows. Training windows overlap by half; validation
   and test windows tile the scene. A window with any no-data pixel is dropped.
 - **Balance.** Trees cover a few percent of these landscapes, so every epoch
-  takes all windows holding trees plus an equal number of tree-free windows,
-  redrawn each epoch so the background rotates through the whole pool. The
-  reference script dropped windows with under 1.5 % trees; this one keeps
-  them, because a lone shelterbelt or farmstead is exactly what a
-  trees-outside-forests model has to learn.
-- **Network.** U-Net with a ResNet-34 encoder initialised from ImageNet; the
+  takes all windows holding trees plus `background_ratio` tree-free windows
+  per tree window, redrawn each epoch so the background rotates through the
+  whole pool. `min_tree_fraction` sets what counts as a tree window: the
+  default 0 keeps every window with any tree pixel; the testing programme
+  found the reference script's 1.5 % rule better (windows with a handful of
+  tree pixels teach the model to hedge), and the candidate recipe uses it.
+  `late_season_weight` counts windows from scenes captured in
+  `late_season_months` several times (tested, rejected; kept as an option).
+  `train_years` restricts training to chosen imagery years (tested, rejected).
+- **Network.** U-Net with a ResNet encoder initialised from ImageNet
+  (`encoder`: ResNet-34 by default; ResNet-50 in the candidate recipe); the
   first convolution is widened to 4 bands (the RGB filters are reused and
   rescaled). The reference trained from scratch with frozen batch-norm; a
   pretrained encoder converges faster and generalises better on a few hundred
@@ -114,16 +126,27 @@ Scenes absent from the partition are excluded. With `test34` that is 86 train,
 - **Inputs.** Bands scaled to 0-1 then standardised with the training set's
   per-band mean and standard deviation (`band_stats.json`, stored in every
   checkpoint so prediction uses the same numbers).
-- **Augmentation.** Flips, quarter-turn rotations, and a per-band gain and
-  offset jitter, because NAIP exposure differs between flights and years.
-- **Loss and optimiser.** Half binary cross-entropy, half soft Dice, on
-  logits. AdamW with a one-cycle learning-rate schedule (10 % warm-up, cosine
-  decay) and gradient clipping at 1.
+- **Augmentation** (`augment`). `standard`: flips, quarter-turn rotations,
+  and a per-band gain and offset jitter, because NAIP exposure differs
+  between flights and years. `strong` widens the jitter and adds a per-band
+  gamma; `blur_scale` adds a 3x3 blur and a 0.8 to 1.25 rescale on half the
+  patches, because 2018-onward NAIP is 0.6 m resampled to 1 m (the candidate
+  recipe uses this one); `strong_blur_scale` does both (tested; too much).
+- **Loss and optimiser** (`loss`). `bce_dice`: half binary cross-entropy,
+  half soft Dice, on logits. `tversky` (beta `tversky_beta`, 0.7 in the
+  candidate recipe) weights false positives above misses, which is area
+  bias on the near-empty scenes; `focal_tversky` adds a focal exponent
+  (tested; no gain). AdamW with a one-cycle learning-rate schedule (10 %
+  warm-up, cosine decay) and gradient clipping at 1.
 - **Model selection.** After every epoch the validation split is scored at
   19 thresholds from 0.05 to 0.95; the best F1 and its threshold are logged.
   Early stopping watches that F1 (`patience` epochs, after `min_epochs`), and
   the best epoch's weights and threshold are what `best.pt` holds. The test
-  split is scored once, at the end, with that fixed threshold.
+  split is scored once, at the end, with that fixed threshold. That stored
+  threshold is not a stable property of a model (it lands anywhere between
+  0.05 and 0.90 across seeds); the suite's area-unbiased calibration
+  (`tools/calibrate_threshold.py`) is what makes runs comparable and what
+  prediction for the estimate should use.
 - **Prediction.** 512-pixel windows with half overlap, blended with a cosine
   weight, so scene-sized maps have no tile seams. All-zero pixels are no data.
 

@@ -89,11 +89,15 @@ link_year <- function(src_dir, dst_dir) {
 #'   hold a naip_1.5km GeoTIFF.
 #' @param mode "consensus": only a KS-flagged outlier year is remapped, to the
 #'   most recent consensus year. "reference": every year but the reference is
-#'   remapped to it.
+#'   remapped to it. "year": the `target_years` are remapped, nothing else.
 #' @param reference_year "latest" or a year; in consensus mode the reference is
 #'   always the consensus pair's most recent year and this is ignored.
+#' @param target_years "year" mode only: the imagery years to remap (e.g. 2015);
+#'   each is matched to the most recent year of the cell that is not a target
+#'   year, with no KS gate. Cells without such a year, or with nothing to
+#'   remap, are linked as they are.
 harmonize_cell <- function(id, export_dir, out_dir, mode, reference_year, bands, sample_size,
-                           threshold, relative, n_quantiles, overwrite = FALSE) {
+                           threshold, relative, n_quantiles, overwrite = FALSE, target_years = NULL) {
   dirs <- list.files(export_dir, pattern = paste0("^aoi_", id, "_\\d{4}$"), full.names = TRUE)
   years <- sub(".*_(\\d{4})$", "\\1", dirs)
   files <- file.path(dirs, sprintf("naip_1.5km_%s_%s.tif", id, years))
@@ -141,7 +145,23 @@ harmonize_cell <- function(id, export_dir, out_dir, mode, reference_year, bands,
       plan$ks[i] <- ks_distance(rasters[[years[i]]], rasters[[ref]], bands, sample_size)$max
       plan$action[i] <- "normalized"
     }
-  } else stop("harmonize mode must be 'consensus' or 'reference', not ", mode)
+  } else if (mode == "year") {
+    tgt <- intersect(as.character(target_years), years)
+    others <- setdiff(years, as.character(target_years))
+    if (length(tgt) == 0) {
+      plan$note <- sprintf("no %s imagery; nothing to remap", paste(target_years, collapse = "/"))
+    } else if (length(others) == 0) {
+      plan$note <- "every year is a target year; nothing to remap"
+    } else {
+      ref <- max(others)
+      plan$reference <- ref
+      for (i in seq_along(years)) {
+        plan$ks[i] <- if (years[i] == ref) 0 else ks_distance(rasters[[years[i]]], rasters[[ref]], bands, sample_size)$max
+        if (years[i] %in% tgt) plan$action[i] <- "normalized"
+      }
+      plan$note <- sprintf("year mode: %s remapped to %s", paste(tgt, collapse = "/"), ref)
+    }
+  } else stop("harmonize mode must be 'consensus', 'reference' or 'year', not ", mode)
 
   # Write: remapped years get new GeoTIFFs (the LUT from the 1.5 km image is
   # applied to the 1 km crop too, so both stay consistent); other years are

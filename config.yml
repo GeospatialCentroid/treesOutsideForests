@@ -206,6 +206,8 @@ model:
   tversky_beta: 0.7        # above 0.5 weights false positives more than misses
   focal_gamma: 1.33        # focal_tversky only
   augment: "standard"      # standard (flips, turns, mild gain/bias) | strong (H1c: wide gain/bias, per-band gamma) | blur_scale (H4) | strong_blur_scale (both)
+  late_season_weight: 1    # H2: patches from scenes captured in late_season_months count this many times per epoch (1 = off)
+  late_season_months: [9, 10]
   encoder: "resnet34"      # any segmentation_models_pytorch encoder
   encoder_weights: "imagenet"
   batch_size: 16

@@ -1,0 +1,8 @@
+# Phase 3b (10.15): the full combination was no better than its best parts, and the ablation without
+# background ratio 3 beat it. Two more seeds of that ablation, and the leaner recipe with the H4
+# augmentation alone (the two augmentation arms together were no gain on the B0 recipe).
+20260927_P3_no_bg3_s2|--seed 2 --set encoder=resnet50 --set loss=tversky --set tversky_beta=0.7 --set augment=strong_blur_scale --set min_tree_fraction=0.015
+20260927_P3_no_bg3_s3|--seed 3 --set encoder=resnet50 --set loss=tversky --set tversky_beta=0.7 --set augment=strong_blur_scale --set min_tree_fraction=0.015
+20260927_P3b_lean_s1|--seed 1 --set encoder=resnet50 --set loss=tversky --set tversky_beta=0.7 --set augment=blur_scale --set min_tree_fraction=0.015
+20260927_P3b_lean_s2|--seed 2 --set encoder=resnet50 --set loss=tversky --set tversky_beta=0.7 --set augment=blur_scale --set min_tree_fraction=0.015
+20260927_P3b_lean_s3|--seed 3 --set encoder=resnet50 --set loss=tversky --set tversky_beta=0.7 --set augment=blur_scale --set min_tree_fraction=0.015
